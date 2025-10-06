@@ -10,12 +10,15 @@ from absl import flags
 from utils import system, logger
 from pathlib import Path
 import psutil
+from datetime import datetime
+today = datetime.today()
 
 from torchkit.pytorch_utils import set_gpu_mode
 from policies.learner import Learner
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("cfg", None, "path to configuration file")
+flags.DEFINE_string("j", None, "Job name.")
 flags.DEFINE_string("env", None, "env_name")
 flags.DEFINE_string("algo", None, '["td3", "sac", "sacd"]')
 
@@ -35,6 +38,7 @@ flags.DEFINE_boolean("debug", False, "debug mode")
 flags.FLAGS(sys.argv)
 yaml = YAML()
 v = yaml.load(open(FLAGS.cfg))
+job_id = os.getenv("SLURM_JOB_ID") or ""
 
 # overwrite config params
 if FLAGS.env is not None:
@@ -138,7 +142,9 @@ if seq_model != "mlp":
     exp_id += policy_input_str + "/"
 
 os.makedirs(exp_id, exist_ok=True)
-log_folder = os.path.join(exp_id, system.now_str())
+dateday = today.strftime("%b").lower() + str(int(today.strftime("%d")))
+expname = FLAGS.j or system.now_str()
+log_folder = os.path.join("experiments", os.path.join(dateday, job_id + "-" + expname))
 logger_formats = ["stdout", "log", "csv"]
 if v["eval"]["log_tensorboard"]:
     logger_formats.append("tensorboard")

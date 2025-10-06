@@ -78,7 +78,6 @@ class Learner:
             if self.train_env.n_tasks is not None:
                 # NOTE: This is off-policy varibad's setting, i.e. limited training tasks
                 # split to train/eval tasks
-                assert num_train_tasks >= num_eval_tasks > 0
                 shuffled_tasks = np.random.permutation(
                     self.train_env.unwrapped.get_all_task_idx()
                 )

@@ -17,3 +17,9 @@ scripts/tmp_configs/
 *.sif
 
 third_party/
+
+
+slurm
+configs
+.bash_history
+.python_history
