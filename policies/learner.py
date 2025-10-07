@@ -78,11 +78,15 @@ class Learner:
             if self.train_env.n_tasks is not None:
                 # NOTE: This is off-policy varibad's setting, i.e. limited training tasks
                 # split to train/eval tasks
-                shuffled_tasks = np.random.permutation(
-                    self.train_env.unwrapped.get_all_task_idx()
-                )
-                self.train_tasks = shuffled_tasks[:num_train_tasks]
-                self.eval_tasks = shuffled_tasks[-num_eval_tasks:]
+                shuffled_tasks = np.round(np.linspace(0, self.train_env.n_tasks - 1, num_train_tasks)).astype(int)
+                eval_task_idxs = np.zeros((self.train_env.n_tasks,), dtype=bool)
+                eval_task_idxs[shuffled_tasks] = True
+                eval_task_idxs = np.arange(self.train_env.n_tasks)[np.logical_not(eval_task_idxs)]
+                self.train_tasks = shuffled_tasks
+                goals_temp = np.array(self.train_env.unwrapped.goals)
+                logger.log(f"\n Train goals: {goals_temp[self.train_tasks]}\n")
+                self.eval_tasks = eval_task_idxs
+                logger.log(f"\n Eval goals: {goals_temp[self.eval_tasks]}\n")
             else:
                 # NOTE: This is on-policy varibad's setting, i.e. unlimited training tasks
                 assert num_tasks == num_train_tasks == None
@@ -572,6 +576,7 @@ class Learner:
     @torch.no_grad()
     def evaluate(self, tasks, deterministic=True):
 
+        np.random.shuffle(tasks)
         num_episodes = self.max_rollouts_per_task  # k
         # max_trajectory_len = k*H
         returns_per_episode = np.zeros((len(tasks), num_episodes))
@@ -603,7 +608,9 @@ class Learner:
                 # assume initial reward = 0.0
                 action, reward, internal_state = self.agent.get_initial_info()
 
+            episodes_infos = []
             for episode_idx in range(num_episodes):
+                running_obss = [list(np.squeeze(np.array(obs.cpu())))]
                 running_reward = 0.0
                 for _ in range(num_steps_per_episode):
                     if self.agent_arch == AGENT_ARCHS.Memory:
@@ -623,6 +630,7 @@ class Learner:
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )
+                    running_obss.append(list(np.squeeze(np.array(next_obs.cpu()))))
 
                     # add raw reward
                     running_reward += reward.item()
@@ -663,7 +671,10 @@ class Learner:
                         break
 
                 returns_per_episode[task_idx, episode_idx] = running_reward
+                episodes_infos.append(running_obss)
             total_steps[task_idx] = step
+            logger.log(f"\nTask {task} ({task_idx}) ({np.squeeze(np.array(obs.cpu()))}):")
+            logger.log(f"{episodes_infos}\n")
         return returns_per_episode, success_rate, observations, total_steps
 
     def log_train_stats(self, train_stats):
