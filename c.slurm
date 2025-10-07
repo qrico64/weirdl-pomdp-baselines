@@ -1,7 +1,7 @@
 #!/bin/bash -l
-#SBATCH --job-name=rnn_3tasks_20evals        # Job name
-#SBATCH --output=slurm/oct5/out_rnn_3tasks_20evals_%j.txt        # Output file (%j = job ID)
-#SBATCH --error=slurm/oct5/err_rnn_3tasks_20evals_%j.txt         # Error file
+#SBATCH --job-name=rnn_5tasks_deterministic_randomeval        # Job name
+#SBATCH --output=slurm/oct7/%j_%x_out.txt        # Output file (%j = job ID)
+#SBATCH --error=slurm/oct7/%j_%x_err.txt         # Error file
 #SBATCH --time=12:00:00            # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu            # Partition/queue name
 #SBATCH --nodes=1                  # Number of nodes
@@ -27,4 +27,4 @@ echo
 echo
 
 # Run your program
-python policies/main.py --cfg configs/meta/point_robot/rnn_3tasks_10evals.yml --algo td3
+python policies/main.py --cfg configs/meta/point_robot/rnn_5tasks.yml --algo td3 --j rnn_5tasks_deterministic_randomeval

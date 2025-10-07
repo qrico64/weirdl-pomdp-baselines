@@ -19,6 +19,7 @@ from policies.learner import Learner
 FLAGS = flags.FLAGS
 flags.DEFINE_string("cfg", None, "path to configuration file")
 flags.DEFINE_string("j", None, "Job name.")
+flags.mark_flag_as_required("j")
 flags.DEFINE_string("env", None, "env_name")
 flags.DEFINE_string("algo", None, '["td3", "sac", "sacd"]')
 
