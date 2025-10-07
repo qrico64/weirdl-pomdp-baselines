@@ -19,6 +19,7 @@ class PointEnv(Env):
         n_tasks=2,  # this will be modified to 100 in config
         modify_init_state_dist=True,
         on_circle_init_state=True,
+        goal_conditioning=True,
         **kwargs
     ):
 
@@ -27,6 +28,7 @@ class PointEnv(Env):
         self.step_count = 0
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
+        self.goal_conditioning = goal_conditioning
 
         # np.random.seed(1337)
         goals = [
@@ -38,7 +40,7 @@ class PointEnv(Env):
 
         self.reset_task(0)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(4 if self.goal_conditioning else 2,), dtype=np.float32
         )
         self.action_space = spaces.Box(low=-0.1, high=0.1, shape=(2,), dtype=np.float32)
 
@@ -68,7 +70,10 @@ class PointEnv(Env):
         return self.reset_model()
 
     def _get_obs(self):
-        return np.copy(self._state)
+        if self.goal_conditioning:
+            return np.concatenate([np.copy(self._state), np.copy(self._goal)], axis=0)
+        else:
+            return np.copy(self._state)
 
     def step(self, action):
         self._state = self._state + action
@@ -118,20 +123,20 @@ class SparsePointEnv(PointEnv):
         goal_radius=0.2,
         modify_init_state_dist=True,
         on_circle_init_state=True,
+        goal_conditioning=False,
         **kwargs
     ):
-        super().__init__(max_episode_steps, n_tasks)
+        super().__init__(max_episode_steps, n_tasks, goal_conditioning=goal_conditioning)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
 
         # np.random.seed(1337)
         radius = 1.0
-        angles = np.random.uniform(0, np.pi, size=n_tasks)
+        angles = np.linspace(0, np.pi, num=n_tasks, endpoint=True)
         xs = radius * np.cos(angles)
         ys = radius * np.sin(angles)
         goals = np.stack([xs, ys], axis=1)
-        np.random.shuffle(goals)
         goals = goals.tolist()
 
         self.goals = goals
