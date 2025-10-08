@@ -136,7 +136,7 @@ def find_candidate_dirs(root: Path) -> set:
         except OSError:
             continue
 
-        if TARGET_FILE in filenames:
+        if TARGET_FILE in filenames and "eval_success.png" not in filenames:
             csv_path = Path(dirpath) / TARGET_FILE
             if not env_steps_all_empty(csv_path, True):
                 candidates.add(Path(dirpath))
@@ -158,7 +158,7 @@ def main():
         print("[INFO] No directories to delete under the given rules.")
         return
 
-    print(f"[INFO] Found {len(candidates)} director{'y' if len(candidates)==1 else 'ies'} to remove:")
+    print(f"[INFO] Found {len(candidates)} director{'y' if len(candidates)==1 else 'ies'} to plot:")
     for c in sorted(candidates):
         print(f" - {c}")
 
