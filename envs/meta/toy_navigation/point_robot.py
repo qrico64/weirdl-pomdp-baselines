@@ -3,6 +3,7 @@ import numpy as np
 from gym import spaces
 from gym import Env
 from matplotlib.patches import Rectangle
+from typing import Literal
 
 
 class PointEnv(Env):
@@ -16,14 +17,17 @@ class PointEnv(Env):
     def __init__(
         self,
         max_episode_steps=60,
-        n_tasks=2,  # this will be modified to 100 in config
+        num_train_tasks:int=3,
+        num_eval_tasks:int=20,
         modify_init_state_dist=True,
         on_circle_init_state=True,
         goal_conditioning=True,
         **kwargs
     ):
 
-        self.n_tasks = n_tasks
+        self.num_train_tasks = num_train_tasks
+        self.num_eval_tasks = num_eval_tasks
+        self.n_tasks = self.num_train_tasks + self.num_eval_tasks
         self._max_episode_steps = max_episode_steps
         self.step_count = 0
         self.modify_init_state_dist = modify_init_state_dist
@@ -31,12 +35,7 @@ class PointEnv(Env):
         self.goal_conditioning = goal_conditioning
 
         # np.random.seed(1337)
-        goals = [
-            [np.random.uniform(-1.0, 1.0), np.random.uniform(-1.0, 1.0)]
-            for _ in range(n_tasks)
-        ]
-
-        self.goals = goals
+        self.goals = [[np.random.uniform(-1.0, 1.0), np.random.uniform(-1.0, 0.0)] for _ in range(self.n_tasks)]
 
         self.reset_task(0)
         self.observation_space = spaces.Box(
@@ -119,27 +118,43 @@ class SparsePointEnv(PointEnv):
     def __init__(
         self,
         max_episode_steps=60,
-        n_tasks=2,
+        num_train_tasks:int=3,
+        num_eval_tasks:int=20,
         goal_radius=0.2,
         modify_init_state_dist=True,
         on_circle_init_state=True,
         goal_conditioning=False,
+        task_mode:Literal["circle", "circle_down_up", "circle_1_2"]="circle",
         **kwargs
     ):
-        super().__init__(max_episode_steps, n_tasks, goal_conditioning=goal_conditioning)
+        super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
 
         # np.random.seed(1337)
-        radius = 1.0
-        angles = np.linspace(0, np.pi, num=n_tasks, endpoint=True)
-        xs = radius * np.cos(angles)
-        ys = radius * np.sin(angles)
-        goals = np.stack([xs, ys], axis=1)
-        goals = goals.tolist()
-
-        self.goals = goals
+        self.task_mode = task_mode
+        if self.task_mode == "circle":
+            n_tasks = num_train_tasks + num_eval_tasks
+            angles = np.linspace(0, np.pi * 2, num=n_tasks, endpoint=False)
+            assignment = np.zeros((n_tasks,), dtype=bool)
+            assignment[np.round(np.linspace(0, n_tasks, num_train_tasks, endpoint=False)).astype(int)] = True
+            self.train_goals = np.stack([np.cos(angles[assignment]), np.sin(angles[assignment])], axis=1).tolist()
+            self.eval_goals = np.stack([np.cos(angles[np.logical_not(assignment)]), np.sin(angles[np.logical_not(assignment)])], axis=1).tolist()
+        elif self.task_mode == "circle_down_up":
+            angles = np.linspace(np.pi, np.pi * 2, num=num_train_tasks, endpoint=False)
+            self.train_goals = np.stack([np.cos(angles), np.sin(angles)], axis=1).tolist()
+            angles = np.linspace(0, np.pi, num=num_eval_tasks, endpoint=False)
+            self.eval_goals = np.stack([np.cos(angles), np.sin(angles)], axis=1).tolist()
+        elif self.task_mode == "circle_1_2":
+            angles = np.linspace(0, np.pi * 2, num=num_train_tasks, endpoint=False)
+            self.train_goals = np.stack([np.cos(angles), np.sin(angles)], axis=1).tolist()
+            angles = np.linspace(0, np.pi * 2, num=num_eval_tasks, endpoint=False)
+            self.eval_goals = np.stack([2 * np.cos(angles), 2 * np.sin(angles)], axis=1).tolist()
+        else:
+            raise NotImplementedError(f"{self.task_mode} not allowed.")
+        
+        self.goals = np.concatenate([self.train_goals, self.eval_goals], axis=0)
         self.reset_task(0)
 
     def sparsify_rewards(self, r):

@@ -69,7 +69,8 @@ class Learner:
                 env_name,
                 max_rollouts_per_task,
                 seed=self.seed,
-                n_tasks=num_tasks,
+                num_train_tasks=num_train_tasks,
+                num_eval_tasks=num_eval_tasks,
                 **kwargs,
             )  # oracle in kwargs
             self.eval_env = self.train_env
@@ -78,14 +79,10 @@ class Learner:
             if self.train_env.n_tasks is not None:
                 # NOTE: This is off-policy varibad's setting, i.e. limited training tasks
                 # split to train/eval tasks
-                shuffled_tasks = np.round(np.linspace(0, self.train_env.n_tasks - 1, num_train_tasks)).astype(int)
-                eval_task_idxs = np.zeros((self.train_env.n_tasks,), dtype=bool)
-                eval_task_idxs[shuffled_tasks] = True
-                eval_task_idxs = np.arange(self.train_env.n_tasks)[np.logical_not(eval_task_idxs)]
-                self.train_tasks = shuffled_tasks
+                self.train_tasks = np.arange(0, num_train_tasks)
                 goals_temp = np.array(self.train_env.unwrapped.goals)
                 logger.log(f"\n Train goals: {goals_temp[self.train_tasks]}\n")
-                self.eval_tasks = eval_task_idxs
+                self.eval_tasks = np.arange(num_train_tasks, num_train_tasks + num_eval_tasks)
                 logger.log(f"\n Eval goals: {goals_temp[self.eval_tasks]}\n")
             else:
                 # NOTE: This is on-policy varibad's setting, i.e. unlimited training tasks
