@@ -21,7 +21,8 @@ class PointEnv(Env):
         num_eval_tasks:int=20,
         modify_init_state_dist=True,
         on_circle_init_state=True,
-        goal_conditioning=True,
+        goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
+        goal_noise_magnitude: float = 0,
         **kwargs
     ):
 
@@ -33,13 +34,14 @@ class PointEnv(Env):
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
         self.goal_conditioning = goal_conditioning
+        self.goal_noise_magnitude = goal_noise_magnitude
 
         # np.random.seed(1337)
         self.goals = [[np.random.uniform(-1.0, 1.0), np.random.uniform(-1.0, 0.0)] for _ in range(self.n_tasks)]
 
         self.reset_task(0)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(4 if self.goal_conditioning else 2,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(2 if self.goal_conditioning == "no" else 4,), dtype=np.float32
         )
         self.action_space = spaces.Box(low=-0.1, high=0.1, shape=(2,), dtype=np.float32)
 
@@ -47,10 +49,12 @@ class PointEnv(Env):
         """reset goal AND reset the agent"""
         if idx is not None:
             self._goal = np.array(self.goals[idx])
+            self._goal_noise = np.random.normal(size=self._goal.shape) * self.goal_noise_magnitude
         self.reset()
 
     def set_goal(self, goal):
         self._goal = np.asarray(goal)
+        self._goal_noise = np.random.normal(size=self._goal.shape) * self.goal_noise_magnitude
 
     def get_current_task(self):
         # for multi-task MDP
@@ -69,10 +73,14 @@ class PointEnv(Env):
         return self.reset_model()
 
     def _get_obs(self):
-        if self.goal_conditioning:
+        if self.goal_conditioning == "yes":
             return np.concatenate([np.copy(self._state), np.copy(self._goal)], axis=0)
-        else:
+        elif self.goal_conditioning == "no":
             return np.copy(self._state)
+        elif self.goal_conditioning == "fixed_noise":
+            return np.concatenate([np.copy(self._state), np.copy(self._goal + self._goal_noise)], axis=0)
+        else:
+            raise NotImplementedError(f"Unidentified goal conditioning: {self.goal_conditioning}")
 
     def step(self, action):
         self._state = self._state + action
@@ -123,11 +131,12 @@ class SparsePointEnv(PointEnv):
         goal_radius=0.2,
         modify_init_state_dist=True,
         on_circle_init_state=True,
-        goal_conditioning=False,
+        goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         task_mode:Literal["circle", "circle_down_up", "circle_1_2"]="circle",
+        goal_noise_magnitude: float = 0,
         **kwargs
     ):
-        super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning)
+        super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning, goal_noise_magnitude=goal_noise_magnitude)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
