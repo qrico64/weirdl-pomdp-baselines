@@ -4,13 +4,16 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import argparse
-import csv
 import sys
 from pathlib import Path
-import shutil
 from typing import Optional
 
 from scripts.delete_empties import env_steps_all_empty
+
+FILE_NAMES = {
+    'metrics/success_rate_train': ['train_success.png', 'Train Success Rate'],
+    'metrics/success_rate_eval': ['eval_success.png', 'Eval Success Rate'],
+}
 
 def plot_envsteps_vs_eval_success(
     csv: str,
@@ -22,6 +25,7 @@ def plot_envsteps_vs_eval_success(
     linewidth: float = 1.2,
     grid: bool = True,
     ax=None,
+    column='metrics/success_rate_eval',
 ):
     """
     Plot z/env_steps vs metrics/success_rate_eval from a (possibly ragged) CSV.
@@ -50,16 +54,15 @@ def plot_envsteps_vs_eval_success(
     """
 
     if out is None:
-        out = os.path.join(os.path.dirname(csv), "eval_success.png")
+        out = os.path.join(os.path.dirname(csv), FILE_NAMES[column][0])
 
     ENV_STEPS_COL = "z/env_steps"
-    SUCCESS_EVAL_COL = "metrics/success_rate_eval"
 
     # Read CSV with a tolerant parser (handles ragged rows like your sample)
     df = pd.read_csv(csv, engine="python")
 
     # Validate necessary columns
-    missing = [c for c in (ENV_STEPS_COL, SUCCESS_EVAL_COL) if c not in df.columns]
+    missing = [c for c in (ENV_STEPS_COL, column) if c not in df.columns]
     if missing:
         raise ValueError(
             f"Missing required column(s): {missing}. "
@@ -67,10 +70,10 @@ def plot_envsteps_vs_eval_success(
         )
 
     # Keep only relevant columns, coerce to numeric, drop NaNs, and sort
-    df = df[[ENV_STEPS_COL, SUCCESS_EVAL_COL]].copy()
+    df = df[[ENV_STEPS_COL, column]].copy()
     df[ENV_STEPS_COL] = pd.to_numeric(df[ENV_STEPS_COL], errors="coerce")
-    df[SUCCESS_EVAL_COL] = pd.to_numeric(df[SUCCESS_EVAL_COL], errors="coerce")
-    df = df.dropna(subset=[ENV_STEPS_COL, SUCCESS_EVAL_COL]).sort_values(ENV_STEPS_COL)
+    df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df.dropna(subset=[ENV_STEPS_COL, column]).sort_values(ENV_STEPS_COL)
 
     if df.empty:
         raise ValueError("No valid rows after cleaning; nothing to plot.")
@@ -85,15 +88,15 @@ def plot_envsteps_vs_eval_success(
     # Plot
     ax.plot(
         df[ENV_STEPS_COL].to_numpy(),
-        df[SUCCESS_EVAL_COL].to_numpy(),
+        df[column].to_numpy(),
         marker=marker if marker else None,
         linewidth=linewidth,
     )
 
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
-    ax.set_ylabel("Eval Success Rate")
-    ax.set_title(title or "Eval Success Rate vs Environment Steps")
+    ax.set_ylabel(FILE_NAMES[column][1])
+    ax.set_title(title or f"Environment Steps vs. {FILE_NAMES[column][0]}")
 
     if grid:
         ax.grid(True, linestyle="--", alpha=0.4)
@@ -136,7 +139,7 @@ def find_candidate_dirs(root: Path) -> set:
         except OSError:
             continue
 
-        if TARGET_FILE in filenames and "eval_success.png" not in filenames:
+        if TARGET_FILE in filenames and "train_success.png" not in filenames:
             csv_path = Path(dirpath) / TARGET_FILE
             if not env_steps_all_empty(csv_path, True):
                 candidates.add(Path(dirpath))
@@ -145,6 +148,7 @@ def find_candidate_dirs(root: Path) -> set:
 def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
+    ap.add_argument("--column", choices=['metrics/success_rate_train', 'metrics/success_rate_eval'], default='metrics/success_rate_eval', help='Which side are you on?')
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -163,7 +167,7 @@ def main():
         print(f" - {c}")
 
     for candidate in candidates:
-        plot_envsteps_vs_eval_success(os.path.join(candidate, TARGET_FILE))
+        plot_envsteps_vs_eval_success(os.path.join(candidate, TARGET_FILE), column=args.column)
 
 
 
