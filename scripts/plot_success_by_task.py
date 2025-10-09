@@ -38,13 +38,6 @@ def plot_success_rate_by_task(dir: str):
             movement[env_step][task_idx]['is_train'] = task_idx < config['env']['num_train_tasks']
             movement[env_step][task_idx]['task_pos'] = task_pos
             movement[env_step][task_idx]['trajectories'] = trajectories
-    
-    mins = env.goals.min(axis=0) - 0.5
-    maxs = env.goals.max(axis=0) + 0.5
-    H, W = 512, 512
-    pixel_dims = np.array([W, H])
-
-    last_ep = max(list(movement.keys()))
 
     eval_successes_by_position = {}
     for ep in movement.keys():
