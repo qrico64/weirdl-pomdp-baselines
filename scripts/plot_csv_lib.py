@@ -11,8 +11,9 @@ from typing import Optional
 from scripts.delete_empties import env_steps_all_empty
 
 FILE_NAMES = {
-    'metrics/success_rate_train': ['train_success.png', 'Train Success Rate'],
-    'metrics/success_rate_eval': ['eval_success.png', 'Eval Success Rate'],
+    'metrics/success_rate_train': ['train_success.png', 'Train Success Rate', (0, 1.05)],
+    'metrics/success_rate_eval': ['eval_success.png', 'Eval Success Rate', (0, 1.05)],
+    'metrics/return_eval_total': ['eval_return.png', 'Eval Return', None],
 }
 
 def plot_envsteps_vs_eval_success(
@@ -20,7 +21,6 @@ def plot_envsteps_vs_eval_success(
     out: Optional[str] = None,
     title: Optional[str] = None,
     xlim: Optional[tuple] = None,
-    ylim: Optional[tuple] = (0.0, 1.05),
     marker: Optional[str] = "o",
     linewidth: float = 1.2,
     grid: bool = True,
@@ -96,13 +96,14 @@ def plot_envsteps_vs_eval_success(
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
     ax.set_ylabel(FILE_NAMES[column][1])
-    ax.set_title(title or f"Environment Steps vs. {FILE_NAMES[column][0]}")
+    ax.set_title(title or f"Environment Steps vs. {FILE_NAMES[column][1]}")
 
     if grid:
         ax.grid(True, linestyle="--", alpha=0.4)
 
     if xlim is not None:
         ax.set_xlim(*xlim)
+    ylim = FILE_NAMES[column][2]
     if ylim is not None:
         ax.set_ylim(*ylim)
 
@@ -116,6 +117,7 @@ def plot_envsteps_vs_eval_success(
     fig.tight_layout()
 
     fig.savefig(out, dpi=200)
+    print(out)
 
 
 
@@ -125,7 +127,7 @@ def plot_envsteps_vs_eval_success(
 TARGET_FILE = "progress.csv"
 TARGET_COL = "z/env_steps"
 
-def find_candidate_dirs(root: Path) -> set:
+def find_candidate_dirs(root: Path, column: str) -> set:
     """
     Walks the tree and collects parent directories of progress.csv files where
     TARGET_COL is all empty under the configured rules.
@@ -139,7 +141,7 @@ def find_candidate_dirs(root: Path) -> set:
         except OSError:
             continue
 
-        if TARGET_FILE in filenames and "train_success.png" not in filenames:
+        if TARGET_FILE in filenames and FILE_NAMES[column][0] not in filenames:
             csv_path = Path(dirpath) / TARGET_FILE
             if not env_steps_all_empty(csv_path, True):
                 candidates.add(Path(dirpath))
@@ -148,7 +150,7 @@ def find_candidate_dirs(root: Path) -> set:
 def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
-    ap.add_argument("--column", choices=['metrics/success_rate_train', 'metrics/success_rate_eval'], default='metrics/success_rate_eval', help='Which side are you on?')
+    ap.add_argument("--column", choices=['metrics/success_rate_train', 'metrics/success_rate_eval', 'metrics/return_eval_total'], default='metrics/success_rate_eval', help='Which side are you on?')
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -156,7 +158,7 @@ def main():
         print(f"[ERROR] Root path does not exist or is not a directory: {root}", file=sys.stderr)
         sys.exit(1)
 
-    candidates = find_candidate_dirs(root)
+    candidates = find_candidate_dirs(root, column=args.column)
 
     if not candidates:
         print("[INFO] No directories to delete under the given rules.")
