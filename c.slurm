@@ -1,7 +1,7 @@
 #!/bin/bash -l
-#SBATCH --job-name=rnn_16tasks_circle_1_2_gc        # Job name
-#SBATCH --output=slurm/oct8/%j_%x_out.txt        # Output file (%j = job ID)
-#SBATCH --error=slurm/oct8/%j_%x_err.txt         # Error file
+#SBATCH --job-name=oct11_rnn_8tasks_circle_1_2_gc        # Job name
+#SBATCH --output=slurm/oct11/%j_%x_out.txt        # Output file (%j = job ID)
+#SBATCH --error=slurm/oct11/%j_%x_err.txt         # Error file
 #SBATCH --time=12:00:00            # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu            # Partition/queue name
 #SBATCH --nodes=1                  # Number of nodes
@@ -27,4 +27,4 @@ echo
 echo
 
 # Run your program
-python policies/main.py --cfg configs/meta/circle/rnn_16tasks_circle_1_2_gc.yml --algo td3 --j rnn_16tasks_circle_1_2_gc
+python policies/main.py --cfg configs/meta/circle_reward/rnn_8tasks_circle_1_2_gc.yml --algo td3 --j oct11_rnn_8tasks_circle_1_2_gc

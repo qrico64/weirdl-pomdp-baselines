@@ -23,6 +23,7 @@ class PointEnv(Env):
         on_circle_init_state=True,
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         goal_noise_magnitude: float = 0,
+        reward_conditioning: Literal["no", "yes"] = "no",
         **kwargs
     ):
 
@@ -35,13 +36,15 @@ class PointEnv(Env):
         self.on_circle_init_state = on_circle_init_state
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
+        self.reward_conditioning = reward_conditioning
 
         # np.random.seed(1337)
         self.goals = [[np.random.uniform(-1.0, 1.0), np.random.uniform(-1.0, 0.0)] for _ in range(self.n_tasks)]
 
         self.reset_task(0)
+        obs_dim = (2 if self.goal_conditioning == "no" else 4) + (1 if self.reward_conditioning == "yes" else 0)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(2 if self.goal_conditioning == "no" else 4,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
         self.action_space = spaces.Box(low=-0.1, high=0.1, shape=(2,), dtype=np.float32)
 
@@ -73,14 +76,21 @@ class PointEnv(Env):
         return self.reset_model()
 
     def _get_obs(self):
+        obs: np.ndarray
         if self.goal_conditioning == "yes":
-            return np.concatenate([np.copy(self._state), np.copy(self._goal)], axis=0)
+            obs = np.concatenate([np.copy(self._state), np.copy(self._goal)], axis=0)
         elif self.goal_conditioning == "no":
-            return np.copy(self._state)
+            obs = np.copy(self._state)
         elif self.goal_conditioning == "fixed_noise":
-            return np.concatenate([np.copy(self._state), np.copy(self._goal + self._goal_noise)], axis=0)
+            obs = np.concatenate([np.copy(self._state), np.copy(self._goal + self._goal_noise)], axis=0)
         else:
             raise NotImplementedError(f"Unidentified goal conditioning: {self.goal_conditioning}")
+        
+        if self.reward_conditioning == "yes":
+            reward = -np.linalg.norm(self._state[:2] - self._goal[:2])
+            obs = np.concatenate([obs, np.array([reward])], axis=0)
+        
+        return obs
 
     def step(self, action):
         self._state = self._state + action
@@ -136,7 +146,7 @@ class SparsePointEnv(PointEnv):
         goal_noise_magnitude: float = 0,
         **kwargs
     ):
-        super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning, goal_noise_magnitude=goal_noise_magnitude)
+        super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning, goal_noise_magnitude=goal_noise_magnitude, **kwargs)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
