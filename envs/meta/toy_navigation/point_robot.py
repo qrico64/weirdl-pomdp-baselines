@@ -150,12 +150,14 @@ class SparsePointEnv(PointEnv):
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         task_mode:Literal["circle", "circle_down_up", "circle_1_2"]="circle",
         goal_noise_magnitude: float = 0,
+        reward_mode: Literal["dense", "sparse"] = "dense",
         **kwargs
     ):
         super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning, goal_noise_magnitude=goal_noise_magnitude, **kwargs)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
         self.on_circle_init_state = on_circle_init_state
+        self.reward_mode: Literal["dense", "sparse"] = reward_mode
 
         # np.random.seed(1337)
         self.task_mode = task_mode
@@ -182,12 +184,6 @@ class SparsePointEnv(PointEnv):
         self.goals = np.concatenate([self.train_goals, self.eval_goals], axis=0)
         self.reset_task(0)
 
-    def sparsify_rewards(self, r):
-        """zero out rewards when outside the goal radius"""
-        mask = (r >= -self.goal_radius).astype(np.float32)
-        r = r * mask
-        return r
-
     def reset_model(self):
         self.step_count = 0
         if self.modify_init_state_dist:  # NOTE: in varibad, it always starts from (0,0)
@@ -211,17 +207,22 @@ class SparsePointEnv(PointEnv):
 
     def step(self, action):
         ob, reward, done, d = super().step(action)
-        sparse_reward = self.sparsify_rewards(reward)
-        # make sparse rewards positive
-        if reward >= -self.goal_radius:
-            # sparse_reward += 1 # NOTE: varibad
-            sparse_reward = 1
-        d.update({"sparse_reward": sparse_reward})
-        # return ob, reward, done, d
-        return ob, sparse_reward, done, d
+        reward = self.sparsify_rewards(reward)
+        d.update({"sparse_reward": reward})
+        return ob, reward, done, d
+    
+    def sparsify_rewards(self, reward):
+        if self.reward_mode == "sparse":
+            return 1 if reward >= -self.goal_radius else 0
+        elif self.reward_mode == "dense":
+            return reward
+        else:
+            raise NotImplementedError(f"{self.reward_mode} not allowed.")
 
     def reward(self, state, action=None):
-        return self.sparsify_rewards(super().reward(state, action))
+        reward = super().reward(state, action)
+        reward = self.sparsify_rewards(reward)
+        return reward
 
     def is_goal_state(self):
         if np.linalg.norm(self._state - self._goal) <= self.goal_radius:
