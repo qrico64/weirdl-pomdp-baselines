@@ -1,7 +1,7 @@
 #!/bin/bash -l
-#SBATCH --job-name=oct11_rnn_8tasks_circle_1_2_gc        # Job name
-#SBATCH --output=slurm/oct11/%j_%x_out.txt        # Output file (%j = job ID)
-#SBATCH --error=slurm/oct11/%j_%x_err.txt         # Error file
+#SBATCH --job-name=oct13_antgoal_circle_8tasks_reward_goal        # Job name
+#SBATCH --output=slurm/oct13/%j_%x_out.txt        # Output file (%j = job ID)
+#SBATCH --error=slurm/oct13/%j_%x_err.txt         # Error file
 #SBATCH --time=12:00:00            # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu            # Partition/queue name
 #SBATCH --nodes=1                  # Number of nodes
@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=4          # CPUs per task
 #SBATCH --gres=gpu:1               # GPUs per node (if needed)
 #SBATCH --mem=16G                  # Memory per node
-#SBATCH --partition=gpu-2080ti        # Partition (queue) name
-#SBATCH --account=stf         # Slurm account/project name
+#SBATCH --partition=gpu-l40        # Partition (queue) name
+#SBATCH --account=weirdlab         # Slurm account/project name
 
 # Load environment
 conda activate pomdp4
@@ -27,4 +27,4 @@ echo
 echo
 
 # Run your program
-python policies/main.py --cfg configs/meta/circle_reward/rnn_8tasks_circle_1_2_gc.yml --algo td3 --j oct11_rnn_8tasks_circle_1_2_gc
+python policies/main.py --cfg configs/meta/ant_goal/circle_8tasks_reward_goal.yaml --algo sac --j oct13_antgoal_circle_8tasks_reward_goal

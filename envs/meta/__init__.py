@@ -44,6 +44,16 @@ register(
 )
 
 register(
+    "AntGoal-v0",
+    entry_point="envs.meta.wrappers:mujoco_wrapper",
+    kwargs={
+        "entry_point": "envs.meta.mujoco.ant_goal:AntGoalEnv",
+        "max_episode_steps": 200,
+    },
+    max_episode_steps=200,
+)
+
+register(
     "CheetahDir-v0",
     entry_point="envs.meta.wrappers:mujoco_wrapper",
     kwargs={

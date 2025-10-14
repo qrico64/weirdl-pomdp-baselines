@@ -124,6 +124,12 @@ class PointEnv(Env):
     def render(self):
         print("current state:", self._state)
 
+    def render_pos(self) -> np.ndarray:
+        return self._state[:2]
+    
+    def annotation(self) -> str:
+        return str(list(self._goal))
+
 
 class SparsePointEnv(PointEnv):
     """

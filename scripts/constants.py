@@ -102,6 +102,8 @@ def get_env_tag(path):
             return "Cheetah-Vel"
         elif "AntDir" in path:
             return "Ant-Dir"
+        elif "AntGoal" in path:
+            return "Ant-Goal"
         elif "CheetahDir" in path:
             return "Cheetah-Dir"
         elif "HumanoidDir" in path:
