@@ -20,6 +20,8 @@ from scripts.render import render_circle_and_dot_rgb, stack_frames, write_video_
 def plot_envsteps_vs_eval_success(dir: str):
     log_file = os.path.join(dir, "experiment.log")
     config = read_yaml_in_experiment(dir)
+    if 'goal_conditioning' not in config['env']:
+        config['env']['goal_conditioning'] = 'no'
     if isinstance(config['env']['goal_conditioning'], bool):
         config['env']['goal_conditioning'] = "yes" if config['env']['goal_conditioning'] else "no"
     with open(log_file, 'r') as file:

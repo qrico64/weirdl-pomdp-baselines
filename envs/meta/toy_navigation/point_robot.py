@@ -151,8 +151,11 @@ class SparsePointEnv(PointEnv):
         task_mode:Literal["circle", "circle_down_up", "circle_1_2"]="circle",
         goal_noise_magnitude: float = 0,
         reward_mode: Literal["dense", "sparse"] = "dense",
+        wind_mode: Literal["none", "fixed", "fixed_per_trajectory", "random_per_timestep"] = "none",
         **kwargs
     ):
+        self.wind_mode = wind_mode
+        self._wind = np.zeros((2,))
         super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning, goal_noise_magnitude=goal_noise_magnitude, **kwargs)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
@@ -184,8 +187,23 @@ class SparsePointEnv(PointEnv):
         self.goals = np.concatenate([self.train_goals, self.eval_goals], axis=0)
         self.reset_task(0)
 
+    def reset_wind(self):
+        if self.wind_mode == "none":
+            self._wind = np.zeros((2,))
+        elif self.wind_mode == "fixed":
+            self._wind = np.array([-0.04, 0.03])
+        elif self.wind_mode == "fixed_per_trajectory":
+            angle = np.random.uniform(0, 2 * np.pi)
+            self._wind = np.array([np.cos(angle), np.sin(angle)]) * 0.05
+        elif self.wind_mode == "random_per_timestep":
+            angle = np.random.uniform(0, 2 * np.pi)
+            self._wind = np.array([np.cos(angle), np.sin(angle)]) * 0.05
+        else:
+            raise NotImplementedError(f"{self.wind_mode} not allowed.")
+
     def reset_model(self):
         self.step_count = 0
+        self.reset_wind()
         if self.modify_init_state_dist:  # NOTE: in varibad, it always starts from (0,0)
             self._state = np.array(
                 [np.random.uniform(-1.5, 1.5), np.random.uniform(-0.5, 1.5)]
@@ -206,9 +224,11 @@ class SparsePointEnv(PointEnv):
         return self._get_obs()
 
     def step(self, action):
-        ob, reward, done, d = super().step(action)
+        ob, reward, done, d = super().step(action + self._wind)
         reward = self.sparsify_rewards(reward)
-        d.update({"sparse_reward": reward})
+        d.update({"sparse_reward": reward, "wind": self._wind})
+        if self.wind_mode == "random_per_timestep":
+            self.reset_wind()
         return ob, reward, done, d
     
     def sparsify_rewards(self, reward):
@@ -229,6 +249,9 @@ class SparsePointEnv(PointEnv):
             return True
         else:
             return False
+    
+    def annotation(self) -> str:
+        return f"Goal {list(self._goal)} Wind {list(self._wind)}"
 
     def plot_env(self):
         ax = plt.gca()
