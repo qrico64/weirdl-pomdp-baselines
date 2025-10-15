@@ -37,8 +37,6 @@ register(
     kwargs={
         "entry_point": "envs.meta.mujoco.ant_dir:AntDirEnv",
         "max_episode_steps": 200,
-        "forward_backward": True,
-        "n_tasks": None,
     },
     max_episode_steps=200,
 )
