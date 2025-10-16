@@ -1,4 +1,4 @@
-# python scripts/plot_csv_lib.py experiments/
+# python scripts/plot_csv_lib.py experiments/oct14/ --column all -f 1
 
 import os
 import pandas as pd
@@ -53,6 +53,14 @@ def plot_envsteps_vs_eval_success(
     ax : matplotlib.axes.Axes | None, optional
         If provided, draw on this Axes. Otherwise, create a new Figure/Axes.
     """
+    
+    if column == 'all':
+        for col in FILE_NAMES.keys():
+            try:
+                plot_envsteps_vs_eval_success(csv, out, title, xlim, marker, linewidth, grid, ax, col)
+            except:
+                pass
+        return
 
     if out is None:
         out = os.path.join(os.path.dirname(csv), FILE_NAMES[column][0])
@@ -153,16 +161,19 @@ def find_candidate_dirs(root: Path, column: str, force: bool = False) -> set:
 def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
-    ap.add_argument("--column", choices=FILE_NAMES.keys(), default='metrics/success_rate_eval', help='Which side are you on?')
-    ap.add_argument("--force", choices=['0', '1'], default='0')
+    ap.add_argument("--column", choices=list(FILE_NAMES.keys()) + ['all'], default='metrics/success_rate_eval', help='Which side are you on?')
+    ap.add_argument("-f", choices=['0', '1'], default='0')
     args = ap.parse_args()
 
     root = args.root.resolve()
     if not root.exists() or not root.is_dir():
         print(f"[ERROR] Root path does not exist or is not a directory: {root}", file=sys.stderr)
         sys.exit(1)
+    
+    if args.column == 'all':
+        assert args.f == '1', f"Must regenerate all plots."
 
-    candidates = find_candidate_dirs(root, column=args.column, force=args.force == '1')
+    candidates = find_candidate_dirs(root, column=args.column, force=args.f == '1')
 
     if not candidates:
         print("[INFO] No directories to delete under the given rules.")
