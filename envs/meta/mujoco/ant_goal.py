@@ -1,6 +1,5 @@
 import numpy as np
 from typing import Literal
-from gym import spaces
 
 from .ant_multitask_base import MultitaskAntEnv
 
@@ -16,6 +15,7 @@ class AntGoalEnv(MultitaskAntEnv):
         reward_conditioning: Literal["no", "yes"] = "no",
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         goal_noise_magnitude: float = 0,
+        goal_reward_scale: float = 1,
         **kwargs
     ):
         self.task_mode = task_mode
@@ -24,6 +24,7 @@ class AntGoalEnv(MultitaskAntEnv):
         self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
+        self.goal_reward_scale = goal_reward_scale
         super(AntGoalEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
         self._max_episode_steps = max_episode_steps
     
@@ -31,7 +32,7 @@ class AntGoalEnv(MultitaskAntEnv):
         self.do_simulation(action, self.frame_skip)
         xposafter = np.array(self.get_body_com("torso"))
 
-        goal_reward = -np.linalg.norm(xposafter[:2] - self._goal)
+        goal_reward = -np.linalg.norm(xposafter[:2] - self._goal) * self.goal_reward_scale
 
         ctrl_cost = 0.1 * np.square(action).sum()
         contact_cost = (
