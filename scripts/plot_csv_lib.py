@@ -14,6 +14,7 @@ FILE_NAMES = {
     'metrics/success_rate_train': ['train_success.png', 'Train Success Rate', (0, 1.05)],
     'metrics/success_rate_eval': ['eval_success.png', 'Eval Success Rate', (0, 1.05)],
     'metrics/return_eval_total': ['eval_return.png', 'Eval Return', None],
+    'metrics/return_train_total': ['train_return.png', 'Train Return', None],
 }
 
 def plot_envsteps_vs_eval_success(
@@ -127,7 +128,7 @@ def plot_envsteps_vs_eval_success(
 TARGET_FILE = "progress.csv"
 TARGET_COL = "z/env_steps"
 
-def find_candidate_dirs(root: Path, column: str) -> set:
+def find_candidate_dirs(root: Path, column: str, force: bool = False) -> set:
     """
     Walks the tree and collects parent directories of progress.csv files where
     TARGET_COL is all empty under the configured rules.
@@ -141,7 +142,9 @@ def find_candidate_dirs(root: Path, column: str) -> set:
         except OSError:
             continue
 
-        if TARGET_FILE in filenames and FILE_NAMES[column][0] not in filenames:
+        if not force and FILE_NAMES[column][0] in filenames:
+            continue
+        if TARGET_FILE in filenames:
             csv_path = Path(dirpath) / TARGET_FILE
             if not env_steps_all_empty(csv_path, True):
                 candidates.add(Path(dirpath))
@@ -150,7 +153,8 @@ def find_candidate_dirs(root: Path, column: str) -> set:
 def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
-    ap.add_argument("--column", choices=['metrics/success_rate_train', 'metrics/success_rate_eval', 'metrics/return_eval_total'], default='metrics/success_rate_eval', help='Which side are you on?')
+    ap.add_argument("--column", choices=FILE_NAMES.keys(), default='metrics/success_rate_eval', help='Which side are you on?')
+    ap.add_argument("--force", choices=['0', '1'], default='0')
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -158,7 +162,7 @@ def main():
         print(f"[ERROR] Root path does not exist or is not a directory: {root}", file=sys.stderr)
         sys.exit(1)
 
-    candidates = find_candidate_dirs(root, column=args.column)
+    candidates = find_candidate_dirs(root, column=args.column, force=args.force == '1')
 
     if not candidates:
         print("[INFO] No directories to delete under the given rules.")
@@ -169,7 +173,11 @@ def main():
         print(f" - {c}")
 
     for candidate in candidates:
-        plot_envsteps_vs_eval_success(os.path.join(candidate, TARGET_FILE), column=args.column)
+        try:
+            plot_envsteps_vs_eval_success(os.path.join(candidate, TARGET_FILE), column=args.column)
+        except:
+            # raise
+            pass
 
 
 
