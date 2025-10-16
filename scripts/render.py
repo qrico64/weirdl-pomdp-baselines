@@ -1,74 +1,204 @@
 import numpy as np
+from typing import Tuple, Optional
 
 # --------------------------
 # Rendering primitives (RGB)
 # --------------------------
 
-def render_circle_and_dot_rgb(
-    shape,
-    circle_center,
-    circle_radius,
-    circle_thickness=1.0,
-    dot_center=None,
-    dot_radius=2.0,
-    bg_color=(0, 0, 0),
-    circle_color=(255, 255, 255),
-    dot_color=(255, 0, 0),
-    dtype=np.uint8,
-):
+def render_circle(
+    image: np.ndarray,
+    center: Tuple[float, float],
+    radius: float,
+    thickness: float,
+    color: Optional[Tuple[float, float, float]] = None,
+    in_place: bool = False,
+) -> np.ndarray:
     """
-    Render a circle perimeter (ring) and a filled dot into an RGB image.
+    Draw a circle outline (ring) on a color image.
 
-    Parameters
-    ----------
-    shape : (int, int)
-        (height, width).
-    circle_center : (float, float)
-        (cy, cx) center of the circle perimeter in pixel coords.
-    circle_radius : float
-        Radius (pixels).
-    circle_thickness : float, default 1.0
-        Ring thickness (pixels).
-    dot_center : (float, float) or None
-        Center of the filled dot. If None, uses circle_center.
-    dot_radius : float, default 2.0
-        Dot radius (pixels).
-    bg_color, circle_color, dot_color : tuple[int, int, int]
-        RGB colors in 0..255.
-    dtype : np.dtype
-        Output dtype, typically uint8.
+    Args:
+        image: (H, W, 3) array. dtype can be uint8, float32, etc.
+        center: (cy, cx) in pixel coordinates (row, col), floats allowed.
+        radius: Circle radius in pixels.
+        thickness: Ring thickness in pixels (>= 0). If 0, nothing is drawn.
+        color: Optional (R, G, B). If None, uses max value for integer dtypes
+               (e.g., 255) or 1.0 for float images.
+        in_place: If True, modify the input image; otherwise operate on a copy.
 
-    Returns
-    -------
-    img : (H, W, 3) np.ndarray
-        RGB image with rendered shapes.
+    Returns:
+        The image with the circle drawn (same dtype as input).
     """
-    H, W = shape
-    cy, cx = circle_center
-    if dot_center is None:
-        dy, dx = cy, cx
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("image must have shape (H, W, 3)")
+    if radius < 0:
+        raise ValueError("radius must be non-negative")
+    if thickness < 0:
+        raise ValueError("thickness must be non-negative")
+
+    img = image if in_place else image.copy()
+    H, W, _ = img.shape
+    cy, cx = center
+
+    # Choose default color if none provided.
+    if color is None:
+        if np.issubdtype(img.dtype, np.integer):
+            vmax = np.iinfo(img.dtype).max
+            draw_color = np.array([vmax, vmax, vmax], dtype=img.dtype)
+        else:
+            draw_color = np.array([1.0, 1.0, 1.0], dtype=img.dtype)
     else:
-        dy, dx = dot_center
+        draw_color = np.asarray(color, dtype=img.dtype)
+        if draw_color.shape != (3,):
+            raise ValueError("color must be a 3-tuple (R, G, B)")
 
-    yy, xx = np.ogrid[:H, :W]
-    dist_circle = np.hypot(yy - cy, xx - cx)
-    dist_dot = np.hypot(yy - dy, xx - dx)
+    if thickness == 0 or radius == 0:
+        return img
 
-    half_t = float(circle_thickness) / 2.0
-    ring_mask = np.abs(dist_circle - float(circle_radius)) <= half_t
-    dot_mask = dist_dot <= float(dot_radius)
+    # Compute distance-squared grid to the (float) center.
+    ys = np.arange(H, dtype=np.float32)[:, None]  # shape (H, 1)
+    xs = np.arange(W, dtype=np.float32)[None, :]  # shape (1, W)
+    dist2 = (ys - cy) ** 2 + (xs - cx) ** 2
 
-    # Initialize RGB canvas
-    img = np.empty((H, W, 3), dtype=np.float32)
-    img[:] = np.array(bg_color, np.float32)
+    # Ring band [r_inner, r_outer] with half-thickness on each side.
+    half_t = thickness / 2.0
+    r_inner = max(0.0, radius - half_t)
+    r_outer = radius + half_t
 
-    # Draw ring (perimeter)
-    img[ring_mask] = np.array(circle_color, np.float32)
+    mask = (dist2 >= r_inner * r_inner) & (dist2 <= r_outer * r_outer)
 
-    # Draw dot (filled). Overwrite ring where overlapping:
-    img[dot_mask] = np.array(dot_color, np.float32)
+    # Assign color on the ring. mask is (H, W); img[mask] is (N, 3) and broadcasts draw_color.
+    img[mask] = draw_color
+    return img
 
-    return img.astype(dtype)
+def render_dot(
+    image: np.ndarray,
+    center: Tuple[float, float],
+    radius: float,
+    color: Optional[Tuple[float, float, float]] = (255, 0, 0),
+) -> np.ndarray:
+    """
+    Draw a circle outline (ring) on a color image.
+
+    Args:
+        image: (H, W, 3) array. dtype can be uint8, float32, etc.
+        center: (cy, cx) in pixel coordinates (row, col), floats allowed.
+        radius: Circle radius in pixels.
+        thickness: Ring thickness in pixels (>= 0). If 0, nothing is drawn.
+        color: Optional (R, G, B). If None, uses max value for integer dtypes
+               (e.g., 255) or 1.0 for float images.
+        in_place: If True, modify the input image; otherwise operate on a copy.
+
+    Returns:
+        The image with the circle drawn (same dtype as input).
+    """
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("image must have shape (H, W, 3)")
+    if radius < 0:
+        raise ValueError("radius must be non-negative")
+
+    img = image.copy()
+    H, W, _ = img.shape
+    cy, cx = center
+
+    # Choose default color if none provided.
+    if color is None:
+        if np.issubdtype(img.dtype, np.integer):
+            vmax = np.iinfo(img.dtype).max
+            draw_color = np.array([vmax, vmax, vmax], dtype=img.dtype)
+        else:
+            draw_color = np.array([1.0, 1.0, 1.0], dtype=img.dtype)
+    else:
+        draw_color = np.asarray(color, dtype=img.dtype)
+        if draw_color.shape != (3,):
+            raise ValueError("color must be a 3-tuple (R, G, B)")
+
+    if radius == 0:
+        return img
+
+    # Compute distance-squared grid to the (float) center.
+    ys = np.arange(H, dtype=np.float32)[:, None]  # shape (H, 1)
+    xs = np.arange(W, dtype=np.float32)[None, :]  # shape (1, W)
+    dist2 = np.sqrt((ys - cy) ** 2 + (xs - cx) ** 2)
+
+    mask = dist2 <= radius
+
+    # Assign color on the ring. mask is (H, W); img[mask] is (N, 3) and broadcasts draw_color.
+    img[mask] = draw_color
+    return img
+
+def render_line(
+    image: np.ndarray,
+    point: Tuple[float, float],
+    angle: float,
+    thickness: float,
+    color: Optional[Tuple[float, float, float]] = None,
+    in_place: bool = False,
+) -> np.ndarray:
+    """
+    Draw an infinite straight line on a color image as a solid band of given thickness.
+
+    Args:
+        image: (H, W, 3) array, any numeric dtype (e.g., uint8, float32).
+        point: (py, px) = (row, col) of a point on the line (floats allowed).
+        angle: Line direction angle. Measured from +x axis (rightwards) toward +y (downwards).
+               Use radians by default; set `degrees=True` to interpret in degrees.
+        thickness: Line thickness in pixels (>= 0). If 0, nothing is drawn.
+        color: Optional (R, G, B). If None, uses max value for integer dtype or 1.0 for float.
+        in_place: If True, modify input image; otherwise operate on a copy.
+        degrees: If True, `angle` is in degrees; otherwise radians.
+
+    Returns:
+        Image with the line drawn (same dtype as input).
+    """
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("image must have shape (H, W, 3)")
+    if thickness < 0:
+        raise ValueError("thickness must be non-negative")
+
+    img = image if in_place else image.copy()
+    H, W, _ = img.shape
+    py, px = point
+
+    # Default color based on dtype
+    if color is None:
+        if np.issubdtype(img.dtype, np.integer):
+            vmax = np.iinfo(img.dtype).max
+            draw_color = np.array([vmax, vmax, vmax], dtype=img.dtype)
+        else:
+            draw_color = np.array([1.0, 1.0, 1.0], dtype=img.dtype)
+    else:
+        draw_color = np.asarray(color, dtype=img.dtype)
+        if draw_color.shape != (3,):
+            raise ValueError("color must be a 3-tuple (R, G, B)")
+
+    if thickness == 0:
+        return img
+
+    # Angle handling (image coords: x->cols (right), y->rows (down))
+    theta = float(angle)
+    c, s = np.cos(theta), -np.sin(theta) # Rico: negative because it's up-down flipped.
+
+    # Unit normal vector to the line (in (x,y) ordering)
+    # Line direction d = (c, s); normal n = (-s, c).
+    nx, ny = -s, c
+
+    # Pixel-center grid (X for columns, Y for rows)
+    X = np.arange(W, dtype=np.float32)[None, :]   # shape (1, W)
+    Y = np.arange(H, dtype=np.float32)[:, None]   # shape (H, 1)
+
+    # Signed perpendicular distance to the infinite line through (px, py)
+    dist = (nx * (X - px)) + (ny * (Y - py))
+
+    # Longitudinal (along-ray) projection length t of each pixel center onto d = (c, s)
+    # Keep only points where t >= 0 to form a ray starting at (px, py).
+    t = (c * (X - px)) + (s * (Y - py))
+
+    half_t = thickness / 2.0
+    mask = (np.abs(dist) <= half_t) & (t >= 0.0)
+
+    # Apply color to all pixels within the band
+    img[mask] = draw_color
+    return img
 
 
 # -------------------------------------------
