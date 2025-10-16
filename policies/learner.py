@@ -607,7 +607,9 @@ class Learner:
 
             episodes_infos = []
             for episode_idx in range(num_episodes):
-                running_obss = [list(np.squeeze(self.eval_env.unwrapped.render_pos()))]
+                running_obss = []
+                if "render_pos" in dir(self.eval_env.unwrapped):
+                    running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
                 running_reward = 0.0
                 for _ in range(num_steps_per_episode):
                     if self.agent_arch == AGENT_ARCHS.Memory:
@@ -627,7 +629,8 @@ class Learner:
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )
-                    running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
+                    if "render_pos" in dir(self.eval_env.unwrapped):
+                        running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
 
                     # add raw reward
                     running_reward += reward.item()
@@ -670,7 +673,8 @@ class Learner:
                 returns_per_episode[task_idx, episode_idx] = running_reward
                 episodes_infos.append(running_obss)
             total_steps[task_idx] = step
-            logger.log(f"\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation()}):")
+            if "annotation" in dir(self.eval_env.unwrapped):
+                logger.log(f"\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation()}):")
             logger.log(f"{episodes_infos}\n")
         return returns_per_episode, success_rate, observations, total_steps
 
