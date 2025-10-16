@@ -148,7 +148,7 @@ class SparsePointEnv(PointEnv):
         modify_init_state_dist=True,
         on_circle_init_state=True,
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
-        task_mode:Literal["circle", "circle_down_up", "circle_1_2"]="circle",
+        task_mode: Literal["circle", "circle_down_up", "circle_1_2", "circle_left_right_up_down"] = "circle",
         goal_noise_magnitude: float = 0,
         reward_mode: Literal["dense", "sparse"] = "dense",
         wind_mode: Literal["none", "fixed", "fixed_per_trajectory", "random_per_timestep"] = "none",
@@ -181,6 +181,15 @@ class SparsePointEnv(PointEnv):
             self.train_goals = np.stack([np.cos(angles), np.sin(angles)], axis=1).tolist()
             angles = np.linspace(0, np.pi * 2, num=num_eval_tasks, endpoint=False)
             self.eval_goals = np.stack([2 * np.cos(angles), 2 * np.sin(angles)], axis=1).tolist()
+        elif self.task_mode == "circle_left_right_up_down":
+            train_goals_right = np.linspace(-np.pi / 4, np.pi / 4, num = self.num_train_tasks // 2, endpoint=False)
+            train_goals_left = np.linspace(np.pi * 3 / 4, np.pi * 5 / 4, num = self.num_train_tasks - self.num_train_tasks // 2, endpoint=False)
+            angles = np.concatenate([train_goals_right, train_goals_left], axis=0)
+            self.train_goals = np.stack([np.cos(angles), np.sin(angles)], axis=1).tolist()
+            eval_goals_top = np.linspace(np.pi / 4, np.pi * 3 / 4, num = self.num_eval_tasks // 2, endpoint=False)
+            eval_goals_down = np.linspace(np.pi * 5 / 4, np.pi * 7 / 4, num = self.num_eval_tasks - self.num_eval_tasks // 2, endpoint=False)
+            angles = np.concatenate([eval_goals_top, eval_goals_down], axis=0)
+            self.eval_goals = np.stack([np.cos(angles), np.sin(angles)], axis=1).tolist()
         else:
             raise NotImplementedError(f"{self.task_mode} not allowed.")
         

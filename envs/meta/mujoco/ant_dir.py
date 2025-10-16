@@ -16,7 +16,7 @@ class AntDirEnv(MultitaskAntEnv):
         num_train_tasks:int=3,
         num_eval_tasks:int=20,
         max_episode_steps=200,
-        task_mode: Literal["circle", "circle_down_up"] = "circle",
+        task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down"] = "circle",
         reward_conditioning: Literal["no", "yes"] = "no",
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         goal_noise_magnitude: float = 0,
@@ -101,6 +101,13 @@ class AntDirEnv(MultitaskAntEnv):
         elif self.task_mode == "circle_down_up":
             self.train_goals = np.linspace(np.pi, np.pi * 2, num=self.num_train_tasks, endpoint=False)
             self.eval_goals = np.linspace(0, np.pi, num=self.num_eval_tasks, endpoint=False)
+        elif self.task_mode == "circle_left_right_up_down":
+            train_goals_right = np.linspace(-np.pi / 4, np.pi / 4, num = self.num_train_tasks // 2, endpoint=False)
+            train_goals_left = np.linspace(np.pi * 3 / 4, np.pi * 5 / 4, num = self.num_train_tasks - self.num_train_tasks // 2, endpoint=False)
+            self.train_goals = np.concatenate([train_goals_right, train_goals_left], axis=0)
+            eval_goals_top = np.linspace(np.pi / 4, np.pi * 3 / 4, num = self.num_eval_tasks // 2, endpoint=False)
+            eval_goals_down = np.linspace(np.pi * 5 / 4, np.pi * 7 / 4, num = self.num_eval_tasks - self.num_eval_tasks // 2, endpoint=False)
+            self.eval_goals = np.concatenate([eval_goals_top, eval_goals_down], axis=0)
         else:
             raise NotImplementedError(f"{self.task_mode} not allowed.")
         
