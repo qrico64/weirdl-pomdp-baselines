@@ -24,6 +24,7 @@ class PointEnv(Env):
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         goal_noise_magnitude: float = 0,
         reward_conditioning: Literal["no", "yes"] = "no",
+        infinite_tasks: Literal["no", "yes"] = "no",
         **kwargs
     ):
 
@@ -37,6 +38,7 @@ class PointEnv(Env):
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
         self.reward_conditioning = reward_conditioning
+        self.infinite_tasks = infinite_tasks
 
         # np.random.seed(1337)
         self.goals = [[np.random.uniform(-1.0, 1.0), np.random.uniform(-1.0, 0.0)] for _ in range(self.n_tasks)]
@@ -51,7 +53,10 @@ class PointEnv(Env):
     def reset_task(self, idx):
         """reset goal AND reset the agent"""
         if idx is not None:
-            self._goal = np.array(self.goals[idx])
+            if self.infinite_tasks and idx < self.num_train_tasks:
+                self._goal = self.train_task_distribution()
+            else:
+                self._goal = np.array(self.goals[idx])
             self._goal_noise = np.random.normal(size=self._goal.shape) * self.goal_noise_magnitude
         self.reset()
 
@@ -156,6 +161,7 @@ class SparsePointEnv(PointEnv):
     ):
         self.wind_mode = wind_mode
         self._wind = np.zeros((2,))
+        self.task_mode = task_mode
         super().__init__(max_episode_steps, num_train_tasks, num_eval_tasks, goal_conditioning=goal_conditioning, goal_noise_magnitude=goal_noise_magnitude, **kwargs)
         self.goal_radius = goal_radius
         self.modify_init_state_dist = modify_init_state_dist
@@ -163,7 +169,6 @@ class SparsePointEnv(PointEnv):
         self.reward_mode: Literal["dense", "sparse"] = reward_mode
 
         # np.random.seed(1337)
-        self.task_mode = task_mode
         if self.task_mode == "circle":
             n_tasks = num_train_tasks + num_eval_tasks
             angles = np.linspace(0, np.pi * 2, num=n_tasks, endpoint=False)
@@ -195,6 +200,24 @@ class SparsePointEnv(PointEnv):
         
         self.goals = np.concatenate([self.train_goals, self.eval_goals], axis=0)
         self.reset_task(0)
+    
+    def train_task_distribution(self):
+        if self.task_mode == "circle":
+            angle = np.random.uniform(0, 2 * np.pi)
+            return np.array([np.cos(angle), np.sin(angle)])
+        elif self.task_mode == "circle_down_up":
+            angle = np.random.uniform(np.pi, 2 * np.pi)
+            return np.array([np.cos(angle), np.sin(angle)])
+        elif self.task_mode == "circle_1_2":
+            angle = np.random.uniform(0, 2 * np.pi)
+            return np.array([np.cos(angle), np.sin(angle)])
+        elif self.task_mode == "circle_left_right_up_down":
+            angle = np.random.uniform(-np.pi / 4, 3 * np.pi / 4)
+            if angle > np.pi / 4:
+                angle += np.pi / 2
+            return np.array([np.cos(angle), np.sin(angle)])
+        else:
+            raise NotImplementedError(f"{self.task_mode} not allowed.")
 
     def reset_wind(self):
         if self.wind_mode == "none":

@@ -20,6 +20,7 @@ class AntDirEnv(MultitaskAntEnv):
         reward_conditioning: Literal["no", "yes"] = "no",
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         goal_noise_magnitude: float = 0,
+        infinite_tasks: Literal["no", "yes"] = "no",
         forward_backward=True,
         **kwargs
     ):
@@ -31,6 +32,7 @@ class AntDirEnv(MultitaskAntEnv):
         self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
+        self.infinite_tasks = infinite_tasks
 
         super(AntDirEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
     
@@ -115,11 +117,33 @@ class AntDirEnv(MultitaskAntEnv):
         self.tasks = [{"goal": goal} for goal in self.goals]
         return self.tasks
 
+    def train_task_distribution(self):
+        if self.task_mode == "circle":
+            return np.random.uniform(0, 2 * np.pi)
+        elif self.task_mode == "circle_down_up":
+            return np.random.uniform(np.pi, 2 * np.pi)
+        elif self.task_mode == "circle_left_right_up_down":
+            angle = np.random.uniform(-np.pi / 4, 3 * np.pi / 4)
+            if angle > np.pi / 4:
+                angle += np.pi / 2
+            return angle
+        else:
+            raise NotImplementedError(f"{self.task_mode} not allowed.")
+
     def _sample_raw_task(self):
         assert self.forward_backward == True
         velocity = np.random.choice([-1.0, 1.0])  # not 180 degree
         task = {"goal": velocity}
         return task
+    
+    def reset_task(self, idx):
+        if self.infinite_tasks and idx < self.num_train_tasks:
+            self._goal = self.train_task_distribution()
+            self._task = {"goal": self._goal}
+        else:
+            self._task = self.tasks[idx]
+            self._goal = self._task["goal"]
+        self.reset()
 
     def render_pos(self) -> np.ndarray:
         return np.array(self.get_body_com("torso"))[:2]

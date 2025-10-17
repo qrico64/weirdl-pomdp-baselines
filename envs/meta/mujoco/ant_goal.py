@@ -25,6 +25,7 @@ class AntGoalEnv(MultitaskAntEnv):
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
         self.goal_reward_scale = goal_reward_scale
+        self.goal_radius = 0.2
         super(AntGoalEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
         self._max_episode_steps = max_episode_steps
     

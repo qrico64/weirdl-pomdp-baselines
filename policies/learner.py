@@ -606,6 +606,7 @@ class Learner:
                 action, reward, internal_state = self.agent.get_initial_info()
 
             episodes_infos = []
+            episodes_infos_rewards = []
             for episode_idx in range(num_episodes):
                 running_obss = []
                 if "render_pos" in dir(self.eval_env.unwrapped):
@@ -672,10 +673,12 @@ class Learner:
 
                 returns_per_episode[task_idx, episode_idx] = running_reward
                 episodes_infos.append(running_obss)
+                episodes_infos_rewards.append(running_reward)
             total_steps[task_idx] = step
             if "annotation" in dir(self.eval_env.unwrapped):
                 logger.log(f"\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation()}):")
             logger.log(f"{episodes_infos}\n")
+            logger.log(f"{episodes_infos_rewards}\n")
         return returns_per_episode, success_rate, observations, total_steps
 
     def log_train_stats(self, train_stats):
