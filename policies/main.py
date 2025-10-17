@@ -22,6 +22,7 @@ flags.DEFINE_string("j", None, "Job name.")
 flags.mark_flag_as_required("j")
 flags.DEFINE_string("env", None, "env_name")
 flags.DEFINE_string("algo", None, '["td3", "sac", "sacd"]')
+flags.DEFINE_string("log_folder", None, "log folder")
 
 flags.DEFINE_boolean("automatic_entropy_tuning", None, "for [sac, sacd]")
 flags.DEFINE_float("target_entropy", None, "for [sac, sacd]")
@@ -146,6 +147,10 @@ os.makedirs(exp_id, exist_ok=True)
 dateday = today.strftime("%b").lower() + str(int(today.strftime("%d")))
 expname = FLAGS.j or system.now_str()
 log_folder = os.path.join("experiments", os.path.join(dateday, job_id + "-" + expname))
+if FLAGS.log_folder is not None:
+    log_folder = FLAGS.log_folder
+print(f"Logging to {log_folder}")
+
 logger_formats = ["stdout", "log", "csv"]
 if v["eval"]["log_tensorboard"]:
     logger_formats.append("tensorboard")

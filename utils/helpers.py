@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 import pickle
 import os
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -250,3 +251,8 @@ def load_obj(folder, name):
     filename = os.path.join(folder, name + ".pkl")
     with open(filename, "rb") as f:
         return pickle.load(f)
+
+def today_str():
+    today = datetime.today()
+    dateday = today.strftime("%b").lower() + str(int(today.strftime("%d")))
+    return dateday
