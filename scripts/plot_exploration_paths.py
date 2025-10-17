@@ -33,11 +33,15 @@ def plot_trajectories_pointenv(dir: str):
             env_step = int(line.replace('env steps ', ''))
         elif line.startswith("Task "):
             task_idx = int(line.split(' ')[1])
-            task_pos = env.goals[task_idx]
             if config['env']['env_name'] == "AntDir-v0":
+                task_pos = env.goals[task_idx]
                 assert isinstance(task_pos, float)
                 assert task_pos == eval(line.split(' ')[-1][:-1]), f"{task_pos} != {line.split(' ')[-1][:-1]}"
-                # task_pos = np.array([np.cos(task_pos), np.sin(task_pos)])
+            else:
+                if 'Goal ' in line:
+                    task_pos = eval(line.split('Goal ')[1].split(' Wind')[0])
+                else:
+                    task_pos = env.goals[task_idx]
             trajectories = eval(lines[idx + 1])
             trajectories = [np.array(trajectory) for trajectory in trajectories]
             assert all(trajectory.ndim == 2 and trajectory.shape[1] == 2 for trajectory in trajectories), f"{[trajectory.shape for trajectory in trajectories]}"
@@ -127,7 +131,7 @@ def find_candidate_dirs(root: Path) -> set:
         except OSError:
             continue
 
-        if TARGET_FILE in filenames and "last_ep.mp4" not in filenames:
+        if TARGET_FILE in filenames:
             csv_path = Path(dirpath) / TARGET_FILE
             if not env_steps_all_empty(csv_path, True):
                 candidates.add(Path(dirpath))
@@ -164,5 +168,5 @@ def main():
 
 if __name__ == "__main__":
     # main()
-    plot_trajectories_pointenv("experiments/oct15/30107935-oct15_antdir_circle_16tasks_down_up_goal")
+    plot_trajectories_pointenv("experiments/oct15/30112693-oct15_antgoal_circle_1_2_16tasks_goal")
 
