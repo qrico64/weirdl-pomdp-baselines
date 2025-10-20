@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name=oct16_antdir_circle_left_right_up_down_inftasks_numiter9k        # Job name
-#SBATCH --output=slurm/oct16/%j_%x_out.txt        # Output file (%j = job ID)
-#SBATCH --error=slurm/oct16/%j_%x_err.txt         # Error file
+#SBATCH --output=slurm/oct17/%j_%x_out.txt        # Output file (%j = job ID)
+#SBATCH --error=slurm/oct17/%j_%x_err.txt         # Error file
 #SBATCH --time=24:00:00            # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu            # Partition/queue name
 #SBATCH --nodes=1                  # Number of nodes
@@ -9,8 +9,8 @@
 #SBATCH --cpus-per-task=4          # CPUs per task
 #SBATCH --gres=gpu:1               # GPUs per node (if needed)
 #SBATCH --mem=64G                  # Memory per node
-#SBATCH --partition=gpu-l40s        # Partition (queue) name
-#SBATCH --account=cse         # Slurm account/project name
+#SBATCH --partition=ckpt        # Partition (queue) name
+#SBATCH --account=weirdlab         # Slurm account/project name
 
 # Load environment
 conda activate pomdp4
