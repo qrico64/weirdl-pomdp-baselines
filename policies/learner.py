@@ -932,8 +932,74 @@ class Learner:
         logger.log(f"log_interval: {self.log_interval}")
         logger.log(f"n_env_steps_total: {self.n_env_steps_total}")
         logger.log(f"save_interval: {self.save_interval}")
-        save_path = os.path.join(logger.get_dir(), "save", f"agent_{current_num_iters}_perf{log_perf:.3f}.pt")
-        # save models in later training stage
-        save_path = self.save_model(current_num_iters, log_perf)
-        logger.log(f"save_path: {save_path}")
+
+        save_dir = os.path.join(logger.get_dir(), "save")
+
+        # Save agent model
+        agent_save_path = os.path.join(save_dir, f"agent_{current_num_iters}_perf{log_perf:.3f}.pt")
+        torch.save(self.agent.state_dict(), agent_save_path)
+        logger.log(f"agent_save_path: {agent_save_path}")
+
+        # Save optimizer(s) - generalizable to different agent types
+        optimizer_states = {}
+        for attr_name in dir(self.agent):
+            attr = getattr(self.agent, attr_name)
+            # Check if attribute is an optimizer (has state_dict and step methods)
+            if hasattr(attr, 'state_dict') and hasattr(attr, 'step') and 'optim' in attr_name.lower():
+                optimizer_states[attr_name] = attr.state_dict()
+
+        if optimizer_states:
+            optimizer_save_path = os.path.join(save_dir, f"optimizer_{current_num_iters}_perf{log_perf:.3f}.pt")
+            torch.save(optimizer_states, optimizer_save_path)
+            logger.log(f"optimizer_save_path: {optimizer_save_path}")
+            logger.log(f"saved optimizers: {list(optimizer_states.keys())}")
+
+        # Save learner state
+        learner_state = {
+            # Training progress counters
+            'n_env_steps_total': self._n_env_steps_total,
+            'n_env_steps_total_last': self._n_env_steps_total_last,
+            'n_rl_update_steps_total': self._n_rl_update_steps_total,
+            'n_rollouts_total': self._n_rollouts_total,
+            'successes_in_buffer': self._successes_in_buffer,
+            # Timing information
+            'start_time': self._start_time,
+            'start_time_last': self._start_time_last,
+            # RNG states for reproducibility
+            'random_state': np.random.get_state(),
+            'torch_rng_state': torch.get_rng_state(),
+            'torch_cuda_rng_state': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        }
+        learner_save_path = os.path.join(save_dir, f"learner_{current_num_iters}_perf{log_perf:.3f}.pt")
+        torch.save(learner_state, learner_save_path)
+        logger.log(f"learner_save_path: {learner_save_path}")
+
+        buffer_save_path = os.path.join(save_dir, f"buffer_{current_num_iters}_perf{log_perf:.3f}.pt")
+        torch.save(self.policy_storage, buffer_save_path)
+        logger.log(f"policy_storage size: {self.policy_storage.size()}")
+        logger.log(f"buffer_save_path: {buffer_save_path}")
+
         logger.log("****** Saved Model ******\n")
+
+        # Clean up old checkpoints: keep checkpoints divisible by save_interval OR last 3
+        logger.log("****** Cleaning up old checkpoints ******")
+
+        # Scan save directory for all checkpoint files
+        for filename in os.listdir(save_dir):
+            # Match files like agent_123_perf*.pt, optimizer_123_perf*.pt, learner_123_perf*.pt
+            if not filename.startswith(('agent_', 'optimizer_', 'learner_', 'buffer_')):
+                continue
+            filepath = os.path.join(save_dir, filename)
+            try:
+                iter_num = int(filename.split('_')[1])
+                if (iter_num % self.save_interval != 0 and current_num_iters - iter_num > self.log_interval * 2) or \
+                   (filename.startswith('buffer_') and current_num_iters != iter_num):
+                    logger.log(f"Removing checkpoint: {filepath}")
+                    os.remove(filepath)
+                    logger.log(f"Removed checkpoint: {filepath}")
+            except ValueError:
+                continue
+            except Exception as e:
+                logger.log(f"Failed to remove {filepath}: {e}")
+
+        logger.log("****** Cleaned up old checkpoints ******\n")
