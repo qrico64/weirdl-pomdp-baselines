@@ -328,6 +328,8 @@ class Learner:
 
         self.log_interval = log_interval
         self.save_interval = save_interval
+        assert self.save_interval > 0
+        assert self.save_interval % self.log_interval == 0
         self.log_tensorboard = log_tensorboard
         self.eval_stochastic = eval_stochastic
         self.eval_num_episodes_per_task = num_episodes_per_task
@@ -396,14 +398,8 @@ class Learner:
             ):
                 last_eval_num_iters = current_num_iters
                 perf = self.log()
-                if (
-                    self.save_interval > 0
-                    and self._n_env_steps_total > 0.75 * self.n_env_steps_total
-                    and current_num_iters % self.save_interval == 0
-                ):
-                    # save models in later training stage
-                    self.save_model(current_num_iters, perf)
-        self.save_model(current_num_iters, perf)
+                self.save_ingeneral(perf)
+        self.save_ingeneral(perf)
 
     @torch.no_grad()
     def collect_rollouts(self, num_rollouts, random_actions=False):
@@ -920,7 +916,24 @@ class Learner:
             logger.get_dir(), "save", f"agent_{iter}_perf{perf:.3f}.pt"
         )
         torch.save(self.agent.state_dict(), save_path)
+        return save_path
 
     def load_model(self, ckpt_path):
         self.agent.load_state_dict(torch.load(ckpt_path, map_location=ptu.device))
         print("load successfully from", ckpt_path)
+    
+    def save_ingeneral(self, log_perf):
+        current_num_iters = self._n_env_steps_total // (self.num_rollouts_per_iter * self.max_trajectory_len)
+        logger.log("\n****** Saving Model ******")
+        logger.log(f"_n_env_steps_total: {self._n_env_steps_total}")
+        logger.log(f"num_rollouts_per_iter: {self.num_rollouts_per_iter}")
+        logger.log(f"max_trajectory_len: {self.max_trajectory_len}")
+        logger.log(f"current_num_iters: {current_num_iters}")
+        logger.log(f"log_interval: {self.log_interval}")
+        logger.log(f"n_env_steps_total: {self.n_env_steps_total}")
+        logger.log(f"save_interval: {self.save_interval}")
+        save_path = os.path.join(logger.get_dir(), "save", f"agent_{current_num_iters}_perf{log_perf:.3f}.pt")
+        # save models in later training stage
+        save_path = self.save_model(current_num_iters, log_perf)
+        logger.log(f"save_path: {save_path}")
+        logger.log("****** Saved Model ******\n")
