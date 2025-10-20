@@ -33,6 +33,7 @@ class AntDirEnv(MultitaskAntEnv):
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
         self.infinite_tasks = infinite_tasks
+        self._goal_noise = 0.0
 
         super(AntDirEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
     
@@ -143,10 +144,19 @@ class AntDirEnv(MultitaskAntEnv):
         else:
             self._task = self.tasks[idx]
             self._goal = self._task["goal"]
+        if self.goal_conditioning == "fixed_noise":
+            self._goal_noise = np.random.randn() * self.goal_noise_magnitude
+        else:
+            self._goal_noise = 0.0
         self.reset()
 
     def render_pos(self) -> np.ndarray:
         return np.array(self.get_body_com("torso"))[:2]
     
     def annotation(self) -> str:
-        return str(self._goal)
+        info = {
+            '_goal': self._goal,
+        }
+        if self.goal_conditioning == "fixed_noise":
+            info['_goal_noise'] = self._goal_noise
+        return str(info)
