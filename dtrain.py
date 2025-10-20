@@ -24,7 +24,7 @@ def main(argv=None):
     remote_name = infra.get_default_remote(git_root)
     today = today_str()
     assert args.j.startswith(today), f"{today}"
-    log_dir = os.path.join("experiments", today, args.j)
+    log_dir = Path(os.path.join("experiments", today, args.j)).resolve()
     git_copy_dir = Path(os.path.join(log_dir, "weirdl-pomdp-baselines"))
     assert not os.path.exists(git_copy_dir), f"{git_copy_dir} already exists!"
     new_branch_name = args.j
@@ -74,7 +74,6 @@ echo
 # Run your program
 {' '.join(args.payload[1:])} --j {args.j} --log_folder {log_dir}
 """
-    os.makedirs(log_dir, exist_ok=False)
     slurm_file = os.path.join(log_dir, "c.slurm")
     with open(slurm_file, "w") as fi:
         fi.write(res)
