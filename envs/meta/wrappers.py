@@ -89,10 +89,10 @@ class VariBadWrapper(gym.Wrapper):
             state = np.concatenate((state, [float(self.done_mdp)]))
         return state
 
-    def reset(self, task=None):
+    def reset(self, task=None, **kwargs):
 
         # reset task -- this sets goal and state -- sets self.env._goal and self.env._state
-        self.env.reset_task(task)
+        self.env.reset_task(task, **kwargs)
 
         self.episode_count = 0
         self.step_count_bamdp = 0

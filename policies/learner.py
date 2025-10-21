@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 import gym
+from pathlib import Path
 
 from .models import AGENT_CLASSES, AGENT_ARCHS
 from torchkit.networks import ImageEncoder
@@ -1003,3 +1004,142 @@ class Learner:
                 logger.log(f"Failed to remove {filepath}: {e}")
 
         logger.log("****** Cleaned up old checkpoints ******\n")
+
+    def load_ingeneral(self, agent_file: str):
+        try:
+            agent_file: Path = Path(agent_file)
+            assert agent_file.exists()
+            assert agent_file.name.startswith("agent_")
+
+            # Construct paths to related checkpoint files
+            learner_file: Path = agent_file.parent / ("learner_" + agent_file.name[6:])
+            assert learner_file.exists()
+            optimizer_file: Path = agent_file.parent / ("optimizer_" + agent_file.name[6:])
+            assert optimizer_file.exists()
+
+            # Find the latest buffer file (only one is kept, may not match exact iteration)
+            buffer_files = [fp for fp in agent_file.parent.iterdir() if fp.is_file() and fp.name.startswith("buffer_")]
+            assert len(buffer_files) > 0, "No buffer file found"
+            # Sort by modification time to get the most recent one
+            buffer_file: Path = max(buffer_files, key=lambda p: p.stat().st_mtime)
+
+            logger.log("\n****** Loading Model ******")
+            logger.log(f"agent_file: {agent_file}")
+            logger.log(f"learner_file: {learner_file}")
+            logger.log(f"optimizer_file: {optimizer_file}")
+            logger.log(f"buffer_file: {buffer_file}")
+
+            # Load agent model
+            self.agent.load_state_dict(torch.load(agent_file, map_location=ptu.device))
+            logger.log("Loaded agent model")
+
+            # Load optimizer(s)
+            optimizer_states = torch.load(optimizer_file, map_location=ptu.device)
+            for attr_name, state_dict in optimizer_states.items():
+                if hasattr(self.agent, attr_name):
+                    optimizer = getattr(self.agent, attr_name)
+                    optimizer.load_state_dict(state_dict)
+                    logger.log(f"Loaded optimizer: {attr_name}")
+            logger.log(f"Loaded optimizers: {list(optimizer_states.keys())}")
+
+            # Load learner state
+            learner_state = torch.load(learner_file, map_location=ptu.device)
+            self._n_env_steps_total = learner_state['n_env_steps_total']
+            self._n_env_steps_total_last = learner_state['n_env_steps_total_last']
+            self._n_rl_update_steps_total = learner_state['n_rl_update_steps_total']
+            self._n_rollouts_total = learner_state['n_rollouts_total']
+            self._successes_in_buffer = learner_state['successes_in_buffer']
+            self._start_time = learner_state['start_time']
+            self._start_time_last = learner_state['start_time_last']
+            logger.log("Loaded learner state")
+            logger.log(f"  n_env_steps_total: {self._n_env_steps_total}")
+            logger.log(f"  n_rl_update_steps_total: {self._n_rl_update_steps_total}")
+            logger.log(f"  n_rollouts_total: {self._n_rollouts_total}")
+
+            # Restore RNG states for reproducibility
+            np.random.set_state(learner_state['random_state'])
+            torch.set_rng_state(learner_state['torch_rng_state'])
+            if torch.cuda.is_available() and learner_state['torch_cuda_rng_state'] is not None:
+                torch.cuda.set_rng_state_all(learner_state['torch_cuda_rng_state'])
+            logger.log("Restored RNG states")
+
+            # Load buffer
+            self.policy_storage = torch.load(buffer_file, map_location=ptu.device)
+            logger.log(f"Loaded buffer with size: {self.policy_storage.size()}")
+
+            logger.log("****** Successfully Loaded Model ******\n")
+
+        except Exception as e:
+            logger.log(f"Failed to load from {agent_file.resolve()}: {e}")
+            raise
+    
+    def rollout_model(self, num_episodes: int, task_dict: dict, deterministic=False):
+        results = []
+
+        if self.env_type == "meta":
+            num_steps_per_episode = self.eval_env.unwrapped._max_episode_steps
+        else:
+            num_steps_per_episode = self.eval_env._max_episode_steps
+
+        while len(results) < num_episodes:
+            current = {
+                'observations': [],
+                'actions': [],
+                'rewards': [],
+                'dones': [],
+                'next_observations': [],
+            }
+
+            if self.env_type == "meta" and self.eval_env.n_tasks is not None:
+                obs = ptu.from_numpy(self.eval_env.reset(task=0, override_task=task_dict))
+            else:
+                obs = ptu.from_numpy(self.eval_env.reset())
+            obs = obs.reshape(1, obs.shape[-1])
+
+            if self.agent_arch == AGENT_ARCHS.Memory:
+                action, reward, internal_state = self.agent.get_initial_info()
+
+            for _ in range(num_steps_per_episode):
+                if self.agent_arch == AGENT_ARCHS.Memory:
+                    (action, _, _, _), internal_state = self.agent.act(
+                        prev_internal_state=internal_state,
+                        prev_action=action,
+                        reward=reward,
+                        obs=obs,
+                        deterministic=deterministic,
+                    )
+                else:
+                    action, _, _, _ = self.agent.act(
+                        obs, deterministic=deterministic
+                    )
+
+                # observe reward and next obs
+                next_obs, reward, done, info = utl.env_step(
+                    self.eval_env, action.squeeze(dim=0)
+                )
+
+                # clip reward if necessary for policy inputs
+                if self.reward_clip and self.env_type == "atari":
+                    reward = torch.tanh(reward)
+
+                current['observations'].append(obs)
+                current['actions'].append(action.squeeze(dim=0))
+                current['rewards'].append(reward)
+                current['dones'].append(done)
+                current['next_observations'].append(next_obs)
+
+                done_rollout = False if ptu.get_numpy(done[0][0]) == 0.0 else True
+
+                # set: obs <- next_obs
+                obs = next_obs.clone()
+
+                if done_rollout:
+                    # for all env types, same
+                    break
+                if self.env_type == "meta" and info["done_mdp"] == True:
+                    # for early stopping meta episode like Ant-Dir
+                    break
+
+            results.append(current)
+        
+        return results

@@ -137,7 +137,7 @@ class AntDirEnv(MultitaskAntEnv):
         task = {"goal": velocity}
         return task
     
-    def reset_task(self, idx):
+    def reset_task(self, idx, override_task=None):
         if self.infinite_tasks and idx < self.num_train_tasks:
             self._goal = self.train_task_distribution()
             self._task = {"goal": self._goal}
@@ -148,6 +148,10 @@ class AntDirEnv(MultitaskAntEnv):
             self._goal_noise = np.random.randn() * self.goal_noise_magnitude
         else:
             self._goal_noise = 0.0
+        
+        if override_task is not None:
+            self._goal = override_task['goal']
+
         self.reset()
 
     def render_pos(self) -> np.ndarray:
