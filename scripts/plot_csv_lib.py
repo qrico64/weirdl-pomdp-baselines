@@ -161,8 +161,8 @@ def find_candidate_dirs(root: Path, column: str, force: bool = False) -> set:
 def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
-    ap.add_argument("--column", choices=list(FILE_NAMES.keys()) + ['all'], default='metrics/success_rate_eval', help='Which side are you on?')
-    ap.add_argument("-f", choices=['0', '1'], default='0')
+    ap.add_argument("--column", choices=list(FILE_NAMES.keys()) + ['all'], default='all', help='Which side are you on?')
+    ap.add_argument("-f", choices=['0', '1'])
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -171,6 +171,8 @@ def main():
         sys.exit(1)
     
     if args.column == 'all':
+        if args.f is None:
+            args.f = '1'
         assert args.f == '1', f"Must regenerate all plots."
 
     candidates = find_candidate_dirs(root, column=args.column, force=args.f == '1')
