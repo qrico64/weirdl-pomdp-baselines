@@ -20,6 +20,7 @@ class AntDirEnv(MultitaskAntEnv):
         reward_conditioning: Literal["no", "yes"] = "no",
         goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
         goal_noise_magnitude: float = 0,
+        goal_noise_type: Literal["normal", "uniform"] = "normal",
         infinite_tasks: Literal["no", "yes"] = "no",
         forward_backward=True,
         **kwargs
@@ -32,6 +33,7 @@ class AntDirEnv(MultitaskAntEnv):
         self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
         self.goal_noise_magnitude = goal_noise_magnitude
+        self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
         self._goal_noise = 0.0
 
@@ -144,8 +146,12 @@ class AntDirEnv(MultitaskAntEnv):
         else:
             self._task = self.tasks[idx]
             self._goal = self._task["goal"]
-        if self.goal_conditioning == "fixed_noise":
+        if self.goal_conditioning == "fixed_noise" and self.goal_noise_type == "normal":
             self._goal_noise = np.random.randn() * self.goal_noise_magnitude
+        elif self.goal_conditioning == "fixed_noise" and self.goal_noise_type == "uniform":
+            self._goal_noise = np.random.uniform(-1, 1) * self.goal_noise_magnitude
+        elif self.goal_conditioning == "fixed_noise":
+            raise NotImplementedError(f"Unidentified goal noise type: {self.goal_noise_type}")
         else:
             self._goal_noise = 0.0
         
