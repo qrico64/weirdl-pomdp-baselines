@@ -12,7 +12,7 @@ from envs.meta.make_env import make_env
 from envs.meta.toy_navigation.point_robot import SparsePointEnv
 from scripts.read_yaml import read_yaml_in_experiment
 
-def plot_success_rate_by_task(dir: str):
+def plot_success_rate_by_task(dir: str, column="return", after=0):
     log_file = os.path.join(dir, "experiment.log")
     config = read_yaml_in_experiment(dir)
     if isinstance(config['env']['goal_conditioning'], bool):
@@ -21,62 +21,73 @@ def plot_success_rate_by_task(dir: str):
         lines = [line.rstrip('\n').strip() for line in file]
     
     env_step = -1
-    movement = {}
     env: SparsePointEnv = make_env(config['env']['env_name'], config['env']['max_rollouts_per_task'], **config['env']).unwrapped
+    eval_successes_by_position = {}
     for idx, line in enumerate(lines):
         if line.startswith("env steps "):
             assert line.replace('env steps ', '').isnumeric()
             env_step = int(line.replace('env steps ', ''))
         elif line.startswith("Task "):
+            if env_step < after:
+                continue
             task_idx = int(line.split(' ')[1])
             task_pos = env.goals[task_idx]
             trajectories = eval(lines[idx + 1])
-            if env_step not in movement:
-                movement[env_step] = {}
-            if task_idx not in movement:
-                movement[env_step][task_idx] = {}
-            movement[env_step][task_idx]['is_train'] = task_idx < config['env']['num_train_tasks']
-            movement[env_step][task_idx]['task_pos'] = task_pos
-            movement[env_step][task_idx]['trajectories'] = trajectories
 
-    eval_successes_by_position = {}
-    for ep in movement.keys():
-        for task_idx in movement[ep].keys():
-            ret_num = 0
-            ret_den = 0
-            info = movement[ep][task_idx]
-            for traj in info['trajectories']:
-                ret_den += 1
-                reward_probably = False
-                for s in traj:
-                    pos = np.array(s[:2])
-                    reward_probably = np.linalg.norm(pos - info['task_pos']) <= env.goal_radius
-                if reward_probably:
-                    ret_num += 1
-            if task_idx not in eval_successes_by_position:
-                eval_successes_by_position[task_idx] = [0, 0]
-            eval_successes_by_position[task_idx][0] += ret_num
-            eval_successes_by_position[task_idx][1] += ret_den
+            if column == "return":
+                assert lines[idx + 3].startswith('[') and lines[idx + 3].strip().endswith(']')
+                returns = eval(lines[idx + 3].strip())
+                if task_idx not in eval_successes_by_position:
+                    eval_successes_by_position[task_idx] = [0, 0]
+                eval_successes_by_position[task_idx][0] += returns[0]
+                eval_successes_by_position[task_idx][1] += 1
+            else:
+                ret_num = 0
+                ret_den = 0
+                for traj in trajectories:
+                    ret_den += 1
+                    reward_probably = False
+                    for s in traj:
+                        pos = np.array(s[:2])
+                        reward_probably = np.linalg.norm(pos - task_pos) <= env.goal_radius
+                    if reward_probably:
+                        ret_num += 1
+                if task_idx not in eval_successes_by_position:
+                    eval_successes_by_position[task_idx] = [0, 0]
+                eval_successes_by_position[task_idx][0] += ret_num
+                eval_successes_by_position[task_idx][1] += ret_den
     
     # Create figure and axes
     fig, ax = plt.subplots(figsize=(8, 4))
 
     # Plot
     xs = list(eval_successes_by_position.keys())
-    ys = [eval_successes_by_position[i][0] for i in xs]
+    if column == "return":
+        ys = [eval_successes_by_position[i][0] / eval_successes_by_position[i][1] for i in xs]
+    else:
+        ys = [eval_successes_by_position[i][0] for i in xs]
     ax.bar(xs, ys, color='steelblue')
 
     # Labels and title
+    jobname = Path(dir).name
     ax.set_xlabel("Task index")
-    ax.set_ylabel(f"Number of Successes out of {eval_successes_by_position[0][1]}")
-    ax.set_title("Eval Successes By Task")
+    if column == "return":
+        ax.set_ylabel(f"Returns")
+        ax.set_title(f"Returns By Task ({jobname})")
+    else:
+        ax.set_ylabel(f"Number of Successes out of {eval_successes_by_position[0][1]}")
+        ax.set_title(f"Eval Successes By Task ({jobname})")
 
     # Optional grid
     ax.grid(axis='y', linestyle='--', alpha=0.7)
 
     # Save to file
-    fig.savefig(os.path.join(dir, "success_by_task.png"))
-    print(os.path.join(dir, "success_by_task.png"))
+    if column == "return":
+        outputdir = os.path.join(dir, "return_by_task.png")
+    else:
+        outputdir = os.path.join(dir, "success_by_task.png")
+    fig.savefig(outputdir)
+    print(outputdir)
 
 
 
@@ -105,6 +116,8 @@ def find_candidate_dirs(root: Path) -> set:
 def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
+    ap.add_argument("--after", default=0, type=float)
+    ap.add_argument("--column", choices=["return", "success"], type=float)
     args = ap.parse_args()
 
     root = args.root.resolve()
@@ -125,8 +138,9 @@ def main():
     for candidate in candidates:
         print(f"Encoding {candidate}")
         try:
-            plot_success_rate_by_task(candidate)
-        except Exception:
+            plot_success_rate_by_task(candidate, column=args.column, after=args.after)
+        except Exception as e:
+            print(e)
             continue
 
 

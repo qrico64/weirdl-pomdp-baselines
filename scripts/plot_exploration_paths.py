@@ -27,22 +27,35 @@ def plot_trajectories_pointenv(dir: str):
     env_step = -1
     movement = {}
     env = make_env(config['env']['env_name'], config['env']['max_rollouts_per_task'], **config['env']).unwrapped
+    
+    idx_from = 0
+    idx_env_step = 0
     for idx, line in enumerate(lines):
+        if line.startswith("env steps "):
+            idx_env_step = idx
+        if line.startswith("Task "):
+            idx_from = idx_env_step
+    print(f"  - starting from {idx_from}")
+    
+    lines_truncated = lines[idx_from:]
+    for idx, line in enumerate(lines_truncated):
         if line.startswith("env steps "):
             assert line.replace('env steps ', '').isnumeric()
             env_step = int(line.replace('env steps ', ''))
         elif line.startswith("Task "):
             task_idx = int(line.split(' ')[1])
+            assert line.strip().endswith('):')
+            annotation = line.strip()[line.strip().find(') (') + 3 : -2]
             if config['env']['env_name'] == "AntDir-v0":
-                task_pos = env.goals[task_idx]
+                if isinstance(eval(annotation), dict):
+                    task_pos = eval(annotation)['_goal']
                 assert isinstance(task_pos, float)
-                assert task_pos == eval(line.split(' ')[-1][:-1]), f"{task_pos} != {line.split(' ')[-1][:-1]}"
             else:
                 if 'Goal ' in line:
                     task_pos = eval(line.split('Goal ')[1].split(' Wind')[0])
                 else:
                     task_pos = env.goals[task_idx]
-            trajectories = eval(lines[idx + 1])
+            trajectories = eval(lines_truncated[idx + 1])
             trajectories = [np.array(trajectory) for trajectory in trajectories]
             assert all(trajectory.ndim == 2 and trajectory.shape[1] == 2 for trajectory in trajectories), f"{[trajectory.shape for trajectory in trajectories]}"
             if env_step not in movement:
@@ -161,12 +174,13 @@ def main():
         print(f"Encoding {candidate}")
         try:
             plot_trajectories_pointenv(candidate)
-        except Exception:
+        except Exception as e:
+            raise
             continue
 
 
 
 if __name__ == "__main__":
-    # main()
-    plot_trajectories_pointenv("experiments/oct15/30112693-oct15_antgoal_circle_1_2_16tasks_goal")
+    main()
+    # plot_trajectories_pointenv("experiments/oct15/30112693-oct15_antgoal_circle_1_2_16tasks_goal")
 

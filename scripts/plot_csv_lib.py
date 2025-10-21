@@ -7,6 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Optional
+import numpy as np
 
 from scripts.delete_empties import env_steps_all_empty
 
@@ -95,12 +96,21 @@ def plot_envsteps_vs_eval_success(
         fig = ax.figure
 
     # Plot
-    ax.plot(
-        df[ENV_STEPS_COL].to_numpy(),
-        df[column].to_numpy(),
-        marker=marker if marker else None,
-        linewidth=linewidth,
-    )
+    if df[ENV_STEPS_COL].to_numpy().shape[0] > 40:
+        indices = np.linspace(0, df[ENV_STEPS_COL].to_numpy().shape[0], 40, endpoint=False).round().astype(np.int32)
+        ax.plot(
+            df[ENV_STEPS_COL].to_numpy()[indices],
+            df[column].to_numpy()[indices],
+            marker=marker if marker else None,
+            linewidth=linewidth,
+        )
+    else:
+        ax.plot(
+            df[ENV_STEPS_COL].to_numpy(),
+            df[column].to_numpy(),
+            marker=marker if marker else None,
+            linewidth=linewidth,
+        )
 
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
