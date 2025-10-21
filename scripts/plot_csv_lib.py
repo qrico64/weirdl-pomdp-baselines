@@ -17,57 +17,9 @@ FILE_NAMES = {
     'metrics/return_eval_total': ['eval_return.png', 'Eval Return', None],
     'metrics/return_train_total': ['train_return.png', 'Train Return', None],
 }
+ENV_STEPS_COL = "z/env_steps"
 
-def plot_envsteps_vs_eval_success(
-    csv: str,
-    out: Optional[str] = None,
-    title: Optional[str] = None,
-    xlim: Optional[tuple] = None,
-    marker: Optional[str] = "o",
-    linewidth: float = 1.2,
-    grid: bool = True,
-    ax=None,
-    column='metrics/success_rate_eval',
-):
-    """
-    Plot z/env_steps vs metrics/success_rate_eval from a (possibly ragged) CSV.
-
-    Parameters
-    ----------
-    csv : str
-        Path to the CSV file.
-    out : str | None, optional
-        If provided, save the figure to this path (e.g., "plot.png"). If None,
-        the plot is shown interactively (unless an Axes is supplied).
-    title : str | None, optional
-        Plot title. Defaults to "Eval Success Rate vs Environment Steps".
-    xlim : (float, float) | None, optional
-        Limits for the x-axis.
-    ylim : (float, float) | None, optional
-        Limits for the y-axis. Default is (0.0, 1.05).
-    marker : str | None, optional
-        Matplotlib marker for data points (e.g., "o", ".", None). Default "o".
-    linewidth : float, optional
-        Line width. Default 1.2.
-    grid : bool, optional
-        Whether to show a grid. Default True.
-    ax : matplotlib.axes.Axes | None, optional
-        If provided, draw on this Axes. Otherwise, create a new Figure/Axes.
-    """
-    
-    if column == 'all':
-        for col in FILE_NAMES.keys():
-            try:
-                plot_envsteps_vs_eval_success(csv, out, title, xlim, marker, linewidth, grid, ax, col)
-            except:
-                pass
-        return
-
-    if out is None:
-        out = os.path.join(os.path.dirname(csv), FILE_NAMES[column][0])
-
-    ENV_STEPS_COL = "z/env_steps"
-
+def compile_data(csv: str, column):
     # Read CSV with a tolerant parser (handles ragged rows like your sample)
     df = pd.read_csv(csv, engine="python")
 
@@ -88,40 +40,59 @@ def plot_envsteps_vs_eval_success(
     if df.empty:
         raise ValueError("No valid rows after cleaning; nothing to plot.")
 
-    created_fig = False
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 5))
-        created_fig = True
-    else:
-        fig = ax.figure
-
-    # Plot
     if df[ENV_STEPS_COL].to_numpy().shape[0] > 40:
         indices = np.linspace(0, df[ENV_STEPS_COL].to_numpy().shape[0], 40, endpoint=False).round().astype(np.int32)
-        ax.plot(
-            df[ENV_STEPS_COL].to_numpy()[indices],
-            df[column].to_numpy()[indices],
-            marker=marker if marker else None,
-            linewidth=linewidth,
-        )
+        return df[ENV_STEPS_COL].to_numpy()[indices], df[column].to_numpy()[indices]
     else:
-        ax.plot(
-            df[ENV_STEPS_COL].to_numpy(),
-            df[column].to_numpy(),
-            marker=marker if marker else None,
-            linewidth=linewidth,
-        )
+        return df[ENV_STEPS_COL].to_numpy(), df[column].to_numpy()
+
+
+
+def plot_data(csv: str, xs, ys, column='metrics/success_rate_eval'):
+    out = os.path.join(os.path.dirname(csv), FILE_NAMES[column][0])
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Plot
+    ax.plot(xs, ys, marker="o", linewidth=1.2)
 
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
     ax.set_ylabel(FILE_NAMES[column][1])
-    ax.set_title(title or f"Environment Steps vs. {FILE_NAMES[column][1]}")
+    ax.set_title(f"Environment Steps vs. {FILE_NAMES[column][1]}")
+    ax.grid(True, linestyle="--", alpha=0.4)
 
-    if grid:
-        ax.grid(True, linestyle="--", alpha=0.4)
+    ylim = FILE_NAMES[column][2]
+    if ylim is not None:
+        ax.set_ylim(*ylim)
 
-    if xlim is not None:
-        ax.set_xlim(*xlim)
+    # Nicely format large x-axis ticks (e.g., 1,200,000)
+    try:
+        import matplotlib.ticker as mticker
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, pos: f"{int(x):,}"))
+    except Exception:
+        pass
+
+    fig.tight_layout()
+
+    fig.savefig(out, dpi=200)
+    print(out)
+
+
+def plot_comparison(out: str, csvs: list, column):
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    for csv in csvs:
+        xs, ys = compile_data(csv, column)
+        csv = Path(csv)
+        ax.plot(xs, ys, marker="o", linewidth=1.2, label=csv.parent.name)
+
+    # Labels & cosmetics
+    ax.set_xlabel("Environment Steps")
+    ax.set_ylabel(FILE_NAMES[column][1])
+    ax.set_title(f"Environment Steps vs. {FILE_NAMES[column][1]}")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend()
+
     ylim = FILE_NAMES[column][2]
     if ylim is not None:
         ax.set_ylim(*ylim)
@@ -196,14 +167,23 @@ def main():
         print(f" - {c}")
 
     for candidate in candidates:
-        try:
-            plot_envsteps_vs_eval_success(os.path.join(candidate, TARGET_FILE), column=args.column)
-        except:
-            # raise
-            pass
+        if args.column == "all":
+            columns = list(FILE_NAMES.keys())
+        else:
+            columns = [args.column]
+        csv = os.path.join(candidate, TARGET_FILE)
+        for column in columns:
+            xs, ys = compile_data(csv, column)
+            plot_data(csv, xs, ys, column)
 
 
 
 if __name__ == "__main__":
     main()
+    # plot_comparison("comparison.png", [
+    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_0/progress.csv",
+    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_005/progress.csv",
+    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_02/progress.csv",
+    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_03/progress.csv",
+    # ], column="metrics/return_eval_total")
 
