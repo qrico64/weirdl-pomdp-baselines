@@ -156,6 +156,7 @@ class AntDirEnv(MultitaskAntEnv):
             self._goal_noise = 0.0
         
         if override_task is not None:
+            self._task = override_task
             self._goal = override_task['goal']
 
         self.reset()

@@ -256,3 +256,44 @@ def today_str():
     today = datetime.today()
     dateday = today.strftime("%b").lower() + str(int(today.strftime("%d")))
     return dateday
+
+
+def merge_dicts(base_dict, override_dict):
+    """
+    Recursively merge two dictionaries, with override_dict values taking precedence.
+
+    Args:
+        base_dict: The base dictionary
+        override_dict: Dictionary with values that override the base
+
+    Returns:
+        A new dictionary with merged values
+    """
+    result = base_dict.copy()
+
+    for key, value in override_dict.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            # Recursively merge nested dictionaries
+            result[key] = merge_dicts(result[key], value)
+        else:
+            # Override the value
+            result[key] = value
+
+    return result
+
+
+def ensure_cpu_tensor(tensor):
+    """
+    Ensure a tensor is on CPU, converting it if necessary.
+
+    Args:
+        tensor: A torch tensor that may be on CPU or CUDA
+
+    Returns:
+        The tensor on CPU
+    """
+    if isinstance(tensor, list):
+        return [ensure_cpu_tensor(s) for s in tensor]
+    if tensor.is_cuda:
+        return tensor.cpu()
+    return tensor

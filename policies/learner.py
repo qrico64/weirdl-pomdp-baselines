@@ -8,6 +8,8 @@ import torch
 from torch.nn import functional as F
 import gym
 from pathlib import Path
+from scripts import read_yaml
+from utils import system
 
 from .models import AGENT_CLASSES, AGENT_ARCHS
 from torchkit.networks import ImageEncoder
@@ -264,6 +266,8 @@ class Learner:
         sampled_seq_len=None,
         sample_weight_baseline=None,
         buffer_type=None,
+        use_nominals: bool = False,
+        nominal_model_config_file: str = None,
         **kwargs
     ):
 
@@ -316,6 +320,16 @@ class Learner:
             "total env steps",
             self.n_env_steps_total,
         )
+
+        self.use_nominals = use_nominals
+        self.nominal_model_config_file = nominal_model_config_file
+        if self.use_nominals:
+            self.nominal_model = pull_model(self.nominal_model_config_file, "latest", {})
+            self.nominal_trajectories = {}
+            for task in np.concatenate([self.train_tasks, self.eval_tasks], axis=0):
+                task_info = self.train_env.unwrapped.tasks[task]
+                rollouts = self.nominal_model.rollout_model(1, task_info, True)[0]
+                self.nominal_trajectories[task] = rollouts
 
     def init_eval(
         self,
@@ -1058,9 +1072,10 @@ class Learner:
 
             # Restore RNG states for reproducibility
             np.random.set_state(learner_state['random_state'])
-            torch.set_rng_state(learner_state['torch_rng_state'])
+            # Ensure torch_rng_state is on CPU before setting it
+            torch.set_rng_state(utl.ensure_cpu_tensor(learner_state['torch_rng_state']))
             if torch.cuda.is_available() and learner_state['torch_cuda_rng_state'] is not None:
-                torch.cuda.set_rng_state_all(learner_state['torch_cuda_rng_state'])
+                torch.cuda.set_rng_state_all(utl.ensure_cpu_tensor(learner_state['torch_cuda_rng_state']))
             logger.log("Restored RNG states")
 
             # Load buffer
@@ -1143,3 +1158,34 @@ class Learner:
             results.append(current)
         
         return results
+
+def pull_model(config_file: str, checkpoint_num: str, override_args: dict):
+    assert Path(config_file).name.startswith("variant_"), f"Unable to load incorrect name: {config_file}"
+    print(f"Pulling from {config_file} :")
+    v = read_yaml.read_yaml_to_dict(config_file)
+    seed = v["seed"]
+    system.reproduce(seed)
+    learner = Learner(
+        env_args=utl.merge_dicts(v["env"], override_args.get("env", {})),
+        train_args=utl.merge_dicts(v["train"], override_args.get("train", {})),
+        eval_args=utl.merge_dicts(v["eval"], override_args.get("eval", {})),
+        policy_args=utl.merge_dicts(v["policy"], override_args.get("policy", {})),
+        seed=seed,
+    )
+    
+    agent_files = [fp for fp in (Path(config_file).parent / "save").iterdir() if fp.is_file() and fp.name.startswith("agent_")]
+    if checkpoint_num == "latest":
+        last_agent_file = max(agent_files, key=lambda fp: int(fp.name.split('_')[1]))
+    elif checkpoint_num == "bestperf":
+        last_agent_file = max(agent_files, key=lambda fp: float(fp.name.split('perf')[1][:-3]))
+    else:
+        agent_files_exact = [fp for fp in agent_files if fp.name.startswith(f"agent_{checkpoint_num}_")]
+        assert len(agent_files_exact) > 0, f"{agent_files_exact}"
+        last_agent_file = agent_files_exact[0]
+    
+    learner.load_ingeneral(last_agent_file)
+
+    return learner
+
+
+
