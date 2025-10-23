@@ -173,17 +173,20 @@ def main():
             columns = [args.column]
         csv = os.path.join(candidate, TARGET_FILE)
         for column in columns:
-            xs, ys = compile_data(csv, column)
-            plot_data(csv, xs, ys, column)
+            try:
+                xs, ys = compile_data(csv, column)
+                plot_data(csv, xs, ys, column)
+            except:
+                pass
 
 
 
 if __name__ == "__main__":
     main()
     # plot_comparison("comparison.png", [
-    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_0/progress.csv",
     #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_005/progress.csv",
     #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_02/progress.csv",
     #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_03/progress.csv",
+    #     "experiments/oct21/oct21_gpu_antdir_circle_16tasks_down_up_goal_random_0/progress.csv",
     # ], column="metrics/return_eval_total")
 
