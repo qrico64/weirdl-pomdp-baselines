@@ -297,3 +297,57 @@ def ensure_cpu_tensor(tensor):
     if tensor.is_cuda:
         return tensor.cpu()
     return tensor
+
+
+def quaternion_to_euler(qw, qx, qy, qz):
+    """
+    Convert a quaternion to Euler angles (roll, pitch, yaw).
+
+    Args:
+        qw: Quaternion scalar component (w)
+        qx: Quaternion x component
+        qy: Quaternion y component
+        qz: Quaternion z component
+
+    Returns:
+        tuple: (roll, pitch, yaw) in radians
+            - roll: Rotation around x-axis
+            - pitch: Rotation around y-axis
+            - yaw: Rotation around z-axis
+    """
+    # Roll (x-axis rotation)
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2.0 * (qw * qy - qz * qx)
+    if np.abs(sinp) >= 1:
+        pitch = np.copysign(np.pi / 2, sinp)  # Use 90 degrees if out of range
+    else:
+        pitch = np.arcsin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+
+
+def normalize_angle_to_pi_pi(angle: float):
+    """
+    Normalize an angle to the range [-pi, pi).
+
+    Args:
+        angle: Angle in radians
+
+    Returns:
+        float: Normalized angle in the range [-pi, pi)
+    """
+    angle = angle - np.floor(angle / (2 * np.pi)) * (2 * np.pi)
+    if angle >= np.pi:
+        angle -= np.pi * 2
+    assert -np.pi <= angle and angle < np.pi, f"{angle}"
+    return angle
+

@@ -2,6 +2,7 @@ import numpy as np
 from typing import Literal
 
 from .ant_multitask_base import MultitaskAntEnv
+from utils import helpers
 
 
 class AntDirEnv(MultitaskAntEnv):
@@ -16,12 +17,13 @@ class AntDirEnv(MultitaskAntEnv):
         num_train_tasks:int=3,
         num_eval_tasks:int=20,
         max_episode_steps=200,
-        task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down"] = "circle",
+        task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down", "circle_down_quarter"] = "circle",
         reward_conditioning: Literal["no", "yes"] = "no",
-        goal_conditioning: Literal["no", "yes", "fixed_noise"] = "no",
+        goal_conditioning: Literal["no", "yes", "fixed_noise", "yes_relative"] = "no",
         goal_noise_magnitude: float = 0,
         goal_noise_type: Literal["normal", "uniform"] = "normal",
         infinite_tasks: Literal["no", "yes"] = "no",
+        normalize_kwarg: bool = False,
         forward_backward=True,
         **kwargs
     ):
@@ -36,6 +38,7 @@ class AntDirEnv(MultitaskAntEnv):
         self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
         self._goal_noise = 0.0
+        self.normalize_kwarg = normalize_kwarg
 
         super(AntDirEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
     
@@ -80,11 +83,25 @@ class AntDirEnv(MultitaskAntEnv):
         obs = super(AntDirEnv, self)._get_obs()
 
         if self.goal_conditioning == "yes":
-            obs = np.concatenate([obs, np.array([self._goal])], axis=0)
+            goal = self._goal
+            if self.normalize_kwarg:
+                goal = helpers.normalize_angle_to_pi_pi(goal)
+            obs = np.concatenate([obs, np.array([goal])], axis=0)
         elif self.goal_conditioning == "no":
             pass
         elif self.goal_conditioning == "fixed_noise":
-            obs = np.concatenate([obs, np.array([self._goal + self._goal_noise])], axis=0)
+            goal = self._goal + self._goal_noise
+            if self.normalize_kwarg:
+                goal = helpers.normalize_angle_to_pi_pi(goal)
+            obs = np.concatenate([obs, np.array([goal])], axis=0)
+        elif self.goal_conditioning == "yes_relative":
+            self_orientation = self.get_torso_orientation()
+            relative_orientation = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation)
+            obs = np.concatenate([obs, np.array([relative_orientation])], axis=0)
+        elif self.goal_conditioning == "yes_relative_noise":
+            self_orientation = self.get_torso_orientation()
+            relative_orientation = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation + self._goal_noise)
+            obs = np.concatenate([obs, np.array([relative_orientation])], axis=0)
         else:
             raise NotImplementedError(f"Unidentified goal conditioning: {self.goal_conditioning}")
 
@@ -113,6 +130,9 @@ class AntDirEnv(MultitaskAntEnv):
             eval_goals_top = np.linspace(np.pi / 4, np.pi * 3 / 4, num = self.num_eval_tasks // 2, endpoint=False)
             eval_goals_down = np.linspace(np.pi * 5 / 4, np.pi * 7 / 4, num = self.num_eval_tasks - self.num_eval_tasks // 2, endpoint=False)
             self.eval_goals = np.concatenate([eval_goals_top, eval_goals_down], axis=0)
+        elif self.task_mode == "circle_down_quarter":
+            self.train_goals = np.linspace(np.pi * 5 / 4, np.pi * 7 / 4, num = self.num_train_tasks, endpoint=False)
+            self.eval_goals = np.linspace(-np.pi / 4, np.pi * 5 / 4, num = self.num_eval_tasks, endpoint=False)
         else:
             raise NotImplementedError(f"{self.task_mode} not allowed.")
         
@@ -140,7 +160,7 @@ class AntDirEnv(MultitaskAntEnv):
         return task
     
     def reset_task(self, idx, override_task=None):
-        if self.infinite_tasks and idx < self.num_train_tasks:
+        if self.infinite_tasks == "yes" and idx < self.num_train_tasks:
             self._goal = self.train_task_distribution()
             self._task = {"goal": self._goal}
         else:
@@ -162,8 +182,25 @@ class AntDirEnv(MultitaskAntEnv):
         self.reset()
 
     def render_pos(self) -> np.ndarray:
-        return np.array(self.get_body_com("torso"))[:2]
-    
+        return np.concatenate([np.array(self.get_body_com("torso"))[:2], np.array([self.get_torso_orientation()])], axis=0)
+
+    def get_torso_orientation(self) -> float:
+        """
+        Get the current orientation (yaw angle) of the ant torso in 2D space.
+
+        Returns:
+            float: Yaw angle in radians, where 0 is along the positive x-axis,
+                   and the angle increases counter-clockwise.
+        """
+        # Get quaternion from qpos: [x, y, z, qw, qx, qy, qz]
+        qpos = self.sim.data.qpos
+        qw, qx, qy, qz = qpos[3], qpos[4], qpos[5], qpos[6]
+
+        # Convert quaternion to Euler angles and extract yaw (z-axis rotation)
+        roll, pitch, yaw = helpers.quaternion_to_euler(qw, qx, qy, qz)
+
+        return yaw
+
     def annotation(self) -> str:
         info = {
             '_goal': self._goal,

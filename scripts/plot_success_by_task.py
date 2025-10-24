@@ -117,7 +117,7 @@ def main():
     ap = argparse.ArgumentParser(description="Delete parent dirs if progress.csv has all-empty 'z/env_steps'.")
     ap.add_argument("root", type=Path, help="Root directory to scan")
     ap.add_argument("--after", default=0, type=float)
-    ap.add_argument("--column", choices=["return", "success"], type=float)
+    ap.add_argument("--column", choices=["return", "success"], type=str)
     args = ap.parse_args()
 
     root = args.root.resolve()
