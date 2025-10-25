@@ -8,9 +8,9 @@ env:
   num_tasks: 36
   num_train_tasks: 16
   num_eval_tasks: 20
-  task_mode: circle_down_up
+  task_mode: circle_down_quarter
   reward_conditioning: no
-  goal_conditioning: yes
+  goal_conditioning: yes_relative
   normalize_kwarg: true
 
 train:
