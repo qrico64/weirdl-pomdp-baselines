@@ -78,13 +78,13 @@ def plot_data(csv: str, xs, ys, column='metrics/success_rate_eval'):
     print(out)
 
 
-def plot_comparison(out: str, csvs: list, column):
+def plot_comparison(out: str, csvs: list, column, labels: list = None):
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    for csv in csvs:
+    for idx, csv in enumerate(csvs):
         xs, ys = compile_data(csv, column)
         csv = Path(csv)
-        ax.plot(xs, ys, marker="o", linewidth=1.2, label=csv.parent.name)
+        ax.plot(xs, ys, marker="o", linewidth=1.2, label=labels[idx] if labels is not None else csv.parent.name)
 
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
@@ -183,10 +183,11 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # plot_comparison("comparison.png", [
-    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_005/progress.csv",
-    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_02/progress.csv",
-    #     "experiments/oct20/oct20_gpu_antdir_circle_16tasks_down_up_goal_random_03/progress.csv",
-    #     "experiments/oct21/oct21_gpu_antdir_circle_16tasks_down_up_goal_random_0/progress.csv",
-    # ], column="metrics/return_eval_total")
+    # plot_comparison("normalized_vs_nonnormalized.png", [
+    #     "experiments/oct24/oct24_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal/progress.csv",
+    #     "experiments/oct24/oct24_nonparallel_antdir_circle_down_up_norm_16tasks_goal_relative/progress.csv",
+    # ], column="metrics/return_eval_total", labels=[
+    #     "normalized_non_relative",
+    #     "nonnormalized_non_relative",
+    # ])
 
