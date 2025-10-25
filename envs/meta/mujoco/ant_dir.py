@@ -96,10 +96,12 @@ class AntDirEnv(MultitaskAntEnv):
             obs = np.concatenate([obs, np.array([goal])], axis=0)
         elif self.goal_conditioning == "yes_relative":
             self_orientation = self.get_torso_orientation()
+            assert self.normalize_kwarg
             relative_orientation = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation)
             obs = np.concatenate([obs, np.array([relative_orientation])], axis=0)
         elif self.goal_conditioning == "yes_relative_noise":
             self_orientation = self.get_torso_orientation()
+            assert self.normalize_kwarg
             relative_orientation = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation + self._goal_noise)
             obs = np.concatenate([obs, np.array([relative_orientation])], axis=0)
         else:
