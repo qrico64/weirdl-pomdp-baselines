@@ -19,7 +19,7 @@ class AntDirEnv(MultitaskAntEnv):
         max_episode_steps=200,
         task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down", "circle_down_quarter"] = "circle",
         reward_conditioning: Literal["no", "yes"] = "no",
-        goal_conditioning: Literal["no", "yes", "fixed_noise", "yes_relative"] = "no",
+        goal_conditioning: Literal["no", "yes", "fixed_noise", "yes_relative", "yes_relative_noise"] = "no",
         goal_noise_magnitude: float = 0,
         goal_noise_type: Literal["normal", "uniform"] = "normal",
         infinite_tasks: Literal["no", "yes"] = "no",
