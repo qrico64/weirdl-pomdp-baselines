@@ -152,6 +152,8 @@ class AntDirEnv(MultitaskAntEnv):
             if angle > np.pi / 4:
                 angle += np.pi / 2
             return angle
+        elif self.task_mode == "circle_down_quarter":
+            return np.random.uniform(np.pi * 5 / 4, np.pi * 7 / 4)
         else:
             raise NotImplementedError(f"{self.task_mode} not allowed.")
 
@@ -168,12 +170,10 @@ class AntDirEnv(MultitaskAntEnv):
         else:
             self._task = self.tasks[idx]
             self._goal = self._task["goal"]
-        if self.goal_conditioning == "fixed_noise" and self.goal_noise_type == "normal":
+        if self.goal_noise_type == "normal":
             self._goal_noise = np.random.randn() * self.goal_noise_magnitude
-        elif self.goal_conditioning == "fixed_noise" and self.goal_noise_type == "uniform":
+        elif self.goal_noise_type == "uniform":
             self._goal_noise = np.random.uniform(-1, 1) * self.goal_noise_magnitude
-        elif self.goal_conditioning == "fixed_noise":
-            raise NotImplementedError(f"Unidentified goal noise type: {self.goal_noise_type}")
         else:
             self._goal_noise = 0.0
         
@@ -207,6 +207,6 @@ class AntDirEnv(MultitaskAntEnv):
         info = {
             '_goal': self._goal,
         }
-        if self.goal_conditioning == "fixed_noise":
+        if self.goal_conditioning == "fixed_noise" or self.goal_conditioning == "yes_relative_noise":
             info['_goal_noise'] = self._goal_noise
         return str(info)
