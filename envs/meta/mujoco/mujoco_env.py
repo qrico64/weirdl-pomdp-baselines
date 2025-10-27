@@ -24,6 +24,9 @@ class MujocoEnv(mujoco_env.MujocoEnv, Serializable):
         model_path_is_local=True,
         automatically_set_obs_and_action_space=False,
     ):
+        # Initialize Serializable to support pickling for multiprocessing
+        Serializable.__init__(self)
+
         if model_path_is_local:
             model_path = get_asset_xml(model_path)
         if automatically_set_obs_and_action_space:

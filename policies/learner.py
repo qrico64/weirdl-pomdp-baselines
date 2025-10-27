@@ -27,6 +27,7 @@ from utils import helpers as utl
 from torchkit import pytorch_utils as ptu
 from utils import evaluation as utl_eval
 from utils import logger
+from envs.parallel_env_manager import ParallelEnvManager
 
 
 class Learner:
@@ -51,6 +52,7 @@ class Learner:
         num_eval_tasks=None,
         eval_envs=None,
         worst_percentile=None,
+        num_parallel_workers=1,
         **kwargs
     ):
 
@@ -64,9 +66,10 @@ class Learner:
             "atari",
         ]
         self.env_type = env_type
+        self.num_parallel_workers = num_parallel_workers
 
         if self.env_type == "meta":  # meta tasks: using varibad wrapper
-            from envs.meta.make_env import make_env
+            from envs.meta.make_env import make_env, make_parallel_env
 
             self.train_env = make_env(
                 env_name,
@@ -76,6 +79,21 @@ class Learner:
                 num_eval_tasks=num_eval_tasks,
                 **kwargs,
             )  # oracle in kwargs
+
+            # Create parallel environments for training if num_parallel_workers > 1
+            if num_parallel_workers > 1:
+                self.train_env_parallel = make_parallel_env(
+                    env_name,
+                    max_rollouts_per_task,
+                    num_workers=num_parallel_workers,
+                    seed=self.seed,
+                    num_train_tasks=num_train_tasks,
+                    num_eval_tasks=num_eval_tasks,
+                    **kwargs,
+                )
+            else:
+                self.train_env_parallel = None
+
             self.eval_env = self.train_env
             self.eval_env.seed(self.seed + 1)
 
@@ -197,6 +215,11 @@ class Learner:
 
         else:
             raise ValueError
+
+        # For non-meta environments, set train_env_parallel to None
+        if not hasattr(self, 'train_env_parallel'):
+            breakpoint()
+            self.train_env_parallel = None
 
         # get action / observation dimensions
         if self.train_env.action_space.__class__.__name__ == "Box":
@@ -372,10 +395,21 @@ class Learner:
                 self._n_env_steps_total
                 < self.num_init_rollouts_pool * self.max_trajectory_len
             ):
-                self.collect_rollouts(
-                    num_rollouts=1,
-                    random_actions=True,
-                )
+                # Use parallel collection if available
+                if not hasattr(self, 'train_env_parallel'):
+                    breakpoint()
+                if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
+                    self.collect_rollouts_parallel(
+                        num_rollouts=min(self.num_parallel_workers,
+                                        (self.num_init_rollouts_pool * self.max_trajectory_len - self._n_env_steps_total) // self.max_trajectory_len + 1),
+                        random_actions=True,
+                        parallel_env=self.train_env_parallel,
+                    )
+                else:
+                    self.collect_rollouts(
+                        num_rollouts=1,
+                        random_actions=True,
+                    )
             logger.log(
                 "Done! env steps",
                 self._n_env_steps_total,
@@ -393,7 +427,14 @@ class Learner:
         last_eval_num_iters = 0
         while self._n_env_steps_total < self.n_env_steps_total:
             # collect data from num_rollouts_per_iter train tasks:
-            env_steps = self.collect_rollouts(num_rollouts=self.num_rollouts_per_iter)
+            # Use parallel collection if available
+            if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
+                env_steps = self.collect_rollouts_parallel(
+                    num_rollouts=self.num_rollouts_per_iter,
+                    parallel_env=self.train_env_parallel,
+                )
+            else:
+                env_steps = self.collect_rollouts(num_rollouts=self.num_rollouts_per_iter)
             logger.log("env steps", self._n_env_steps_total)
 
             train_stats = self.update(
@@ -415,6 +456,9 @@ class Learner:
                 perf = self.log()
                 self.save_ingeneral(perf)
         self.save_ingeneral(perf)
+
+        # Clean up parallel environments
+        self.cleanup()
 
     @torch.no_grad()
     def collect_rollouts(self, num_rollouts, random_actions=False):
@@ -550,6 +594,284 @@ class Learner:
                 )
             self._n_env_steps_total += steps
             self._n_rollouts_total += 1
+        return self._n_env_steps_total - before_env_steps
+
+    @torch.no_grad()
+    def collect_rollouts_parallel(self, num_rollouts, random_actions=False, parallel_env: ParallelEnvManager = None):
+        """
+        Collect num_rollouts of trajectories in parallel across multiple environment workers.
+
+        This achieves true parallelization by:
+        1. Sending step commands to ALL active workers (non-blocking, returns immediately)
+        2. Workers compute steps simultaneously in their separate processes
+        3. Collecting results from ALL workers (blocking until all are done)
+
+        :param num_rollouts: Total number of rollouts to collect
+        :param random_actions: Whether to use policy to sample actions, or randomly sample action space
+        :param parallel_env: ParallelEnvManager instance. If None, falls back to sequential collect_rollouts.
+        :return: Number of environment steps collected
+        """
+        if parallel_env is None:
+            return self.collect_rollouts(num_rollouts, random_actions)
+
+        before_env_steps = self._n_env_steps_total
+        num_workers = parallel_env.num_envs
+
+        # Distribute rollouts across workers
+        rollouts_per_worker = num_rollouts // num_workers
+        extra_rollouts = num_rollouts % num_workers
+        worker_rollout_counts = [rollouts_per_worker + (1 if i < extra_rollouts else 0)
+                                  for i in range(num_workers)]
+
+        # Initialize worker states
+        worker_states = {}
+        for worker_id in range(num_workers):
+            if worker_rollout_counts[worker_id] > 0:
+                worker_states[worker_id] = {
+                    'remaining_rollouts': worker_rollout_counts[worker_id],
+                    'active': False,
+                    'steps': 0,
+                    'obs': None,
+                    # For memory-based agents
+                    'obs_list': [],
+                    'act_list': [],
+                    'rew_list': [],
+                    'next_obs_list': [],
+                    'term_list': [],
+                    'action': None,
+                    'reward': None,
+                    'internal_state': None,
+                }
+
+        # INITIAL RESET: Send reset commands to ALL workers (non-blocking)
+        for worker_id in worker_states.keys():
+            if self.env_type == "meta" and parallel_env.n_tasks is not None:
+                task = self.train_tasks[np.random.randint(len(self.train_tasks))]
+            else:
+                task = None
+            parallel_env.remotes[worker_id].send(('reset', {'task': task}))
+
+        # Collect ALL reset responses (workers reset in parallel)
+        for worker_id in worker_states.keys():
+            msg_type, obs_np = parallel_env.remotes[worker_id].recv()
+            assert msg_type == 'obs'
+
+            obs = ptu.from_numpy(obs_np).reshape(1, obs_np.shape[-1])
+            worker_states[worker_id]['obs'] = obs
+            worker_states[worker_id]['active'] = True
+            worker_states[worker_id]['steps'] = 0
+
+            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+                worker_states[worker_id]['obs_list'] = []
+                worker_states[worker_id]['act_list'] = []
+                worker_states[worker_id]['rew_list'] = []
+                worker_states[worker_id]['next_obs_list'] = []
+                worker_states[worker_id]['term_list'] = []
+
+            if self.agent_arch == AGENT_ARCHS.Memory:
+                action, reward, internal_state = self.agent.get_initial_info()
+                worker_states[worker_id]['action'] = action
+                worker_states[worker_id]['reward'] = reward
+                worker_states[worker_id]['internal_state'] = internal_state
+
+        # Main loop: collect rollouts until all workers are done
+        while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
+
+            # PHASE 1: Compute actions for all active workers (batched policy forward pass)
+            active_workers = [wid for wid, ws in worker_states.items() if ws['active']]
+            if not active_workers:
+                break
+
+            worker_actions = {}
+
+            if random_actions:
+                # Random actions: no batching needed, sample independently
+                for worker_id in active_workers:
+                    action = ptu.FloatTensor([parallel_env.action_space.sample()])
+                    if not self.act_continuous:
+                        action = F.one_hot(action.long(), num_classes=self.act_dim).float()
+                    worker_actions[worker_id] = action
+            else:
+                # Batch policy forward pass for all active workers
+                if self.agent_arch == AGENT_ARCHS.Memory:
+                    # For memory-based agents, batch observations and hidden states
+                    batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
+                    batch_prev_actions = torch.cat([worker_states[wid]['action'] for wid in active_workers], dim=0)
+                    batch_rewards = torch.cat([worker_states[wid]['reward'] for wid in active_workers], dim=0)
+                    batch_internal_states = [worker_states[wid]['internal_state'] for wid in active_workers]
+
+                    # Batch forward pass through policy
+                    (batch_actions, _, _, _), batch_new_internal_states = self.agent.act(
+                        prev_internal_state=batch_internal_states,
+                        prev_action=batch_prev_actions,
+                        reward=batch_rewards,
+                        obs=batch_obs,
+                        deterministic=False,
+                    )
+
+                    # Distribute results back to workers
+                    for idx, worker_id in enumerate(active_workers):
+                        worker_actions[worker_id] = batch_actions[idx:idx+1]
+                        worker_states[worker_id]['internal_state'] = batch_new_internal_states[idx] if isinstance(batch_new_internal_states, list) else [s[idx:idx+1] for s in batch_new_internal_states]
+                else:
+                    # For Markov agents, simply batch observations
+                    batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
+
+                    # Batch forward pass through policy
+                    batch_actions, _, _, _ = self.agent.act(batch_obs, deterministic=False)
+
+                    # Distribute results back to workers
+                    for idx, worker_id in enumerate(active_workers):
+                        worker_actions[worker_id] = batch_actions[idx:idx+1]
+
+            # PHASE 2: Send step commands to ALL active workers (non-blocking)
+            # This is the key parallelization point: all workers start computing simultaneously
+            for worker_id, action in worker_actions.items():
+                action_np = ptu.get_numpy(action.squeeze(dim=0))
+                if parallel_env.action_space.__class__.__name__ == "Discrete":
+                    action_np = np.argmax(action_np)
+
+                # Non-blocking send: returns immediately, worker starts step() in parallel
+                parallel_env.remotes[worker_id].send(('step', {'action': action_np}))
+
+            # PHASE 3: Collect results from ALL active workers (blocking)
+            # Workers have been computing in parallel, now we collect their results
+            worker_transitions = {}
+            for worker_id in worker_actions.keys():
+                msg_type, (next_obs_np, reward_np, done_np, info) = parallel_env.remotes[worker_id].recv()
+                assert msg_type == 'transition'
+
+                # Convert to torch tensors (matching utl.env_step format)
+                next_obs = ptu.from_numpy(next_obs_np).view(-1, next_obs_np.shape[0])
+                reward = ptu.FloatTensor([reward_np]).view(-1, 1)
+                done = ptu.from_numpy(np.array(done_np, dtype=int)).view(-1, 1)
+
+                worker_transitions[worker_id] = (next_obs, reward, done, info, worker_actions[worker_id])
+
+            # PHASE 4: Process transitions (add to buffer, check for episode completion)
+            workers_to_reset = []  # Track which workers need reset
+
+            for worker_id, (next_obs, reward, done, info, action) in worker_transitions.items():
+                state = worker_states[worker_id]
+                obs = state['obs']
+
+                # Clip reward if needed
+                if self.reward_clip and self.env_type == "atari":
+                    reward = torch.tanh(reward)
+
+                done_rollout = False if ptu.get_numpy(done[0][0]) == 0.0 else True
+                state['steps'] += 1
+
+                # Determine terminal flag (same logic as original collect_rollouts)
+                if self.env_type == "meta" and "is_goal_state" in info:
+                    # The worker includes is_goal_state in info dict if the method exists
+                    # NOTE: following varibad practice: for meta env, even if reaching the goal (term=True),
+                    # the episode still continues.
+                    term = info["is_goal_state"]
+                    self._successes_in_buffer += int(term)
+                elif self.env_type == "credit":
+                    term = done_rollout
+                else:
+                    term = (
+                        False
+                        if "TimeLimit.truncated" in info or state['steps'] >= self.max_trajectory_len
+                        else done_rollout
+                    )
+
+                # Add transition to buffer
+                if self.agent_arch == AGENT_ARCHS.Markov:
+                    self.policy_storage.add_sample(
+                        observation=ptu.get_numpy(obs.squeeze(dim=0)),
+                        action=ptu.get_numpy(
+                            action.squeeze(dim=0)
+                            if self.act_continuous
+                            else torch.argmax(action.squeeze(dim=0), dim=-1, keepdims=True)
+                        ),
+                        reward=ptu.get_numpy(reward.squeeze(dim=0)),
+                        terminal=np.array([term], dtype=float),
+                        next_observation=ptu.get_numpy(next_obs.squeeze(dim=0)),
+                    )
+                else:  # Memory-based agent
+                    state['obs_list'].append(obs)
+                    state['act_list'].append(action)
+                    state['rew_list'].append(reward)
+                    state['term_list'].append(term)
+                    state['next_obs_list'].append(next_obs)
+
+                # Update observation for next step
+                state['obs'] = next_obs.clone()
+                if self.agent_arch == AGENT_ARCHS.Memory:
+                    state['action'] = action
+                    state['reward'] = reward
+
+                # Handle episode completion
+                if done_rollout:
+                    # For memory-based agents, add complete episode to buffer
+                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+                        act_buffer = torch.cat(state['act_list'], dim=0)
+                        if not self.act_continuous:
+                            act_buffer = torch.argmax(act_buffer, dim=-1, keepdims=True)
+
+                        self.policy_storage.add_episode(
+                            observations=ptu.get_numpy(torch.cat(state['obs_list'], dim=0)),
+                            actions=ptu.get_numpy(act_buffer),
+                            rewards=ptu.get_numpy(torch.cat(state['rew_list'], dim=0)),
+                            terminals=np.array(state['term_list']).reshape(-1, 1),
+                            next_observations=ptu.get_numpy(torch.cat(state['next_obs_list'], dim=0)),
+                        )
+                        print(
+                            f"worker_{worker_id} steps: {state['steps']} term: {term} "
+                            f"ret: {torch.cat(state['rew_list'], dim=0).sum().item():.2f}"
+                        )
+
+                    # Update statistics
+                    self._n_env_steps_total += state['steps']
+                    self._n_rollouts_total += 1
+
+                    # Decrement remaining rollouts
+                    state['remaining_rollouts'] -= 1
+
+                    if state['remaining_rollouts'] > 0:
+                        # Need to reset this worker for another rollout
+                        workers_to_reset.append(worker_id)
+                    else:
+                        # This worker is completely done
+                        state['active'] = False
+
+            # PHASE 5: Reset workers that finished episodes (in parallel)
+            if workers_to_reset:
+                # Send reset commands to all workers that need it (non-blocking)
+                for worker_id in workers_to_reset:
+                    if self.env_type == "meta" and parallel_env.n_tasks is not None:
+                        task = self.train_tasks[np.random.randint(len(self.train_tasks))]
+                    else:
+                        task = None
+                    parallel_env.remotes[worker_id].send(('reset', {'task': task}))
+
+                # Collect reset responses (workers reset in parallel)
+                for worker_id in workers_to_reset:
+                    msg_type, obs_np = parallel_env.remotes[worker_id].recv()
+                    assert msg_type == 'obs'
+
+                    state = worker_states[worker_id]
+                    obs = ptu.from_numpy(obs_np).reshape(1, obs_np.shape[-1])
+                    state['obs'] = obs
+                    state['steps'] = 0
+
+                    # Reset storage for memory-based agents
+                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+                        state['obs_list'] = []
+                        state['act_list'] = []
+                        state['rew_list'] = []
+                        state['next_obs_list'] = []
+                        state['term_list'] = []
+
+                    if self.agent_arch == AGENT_ARCHS.Memory:
+                        action, reward, internal_state = self.agent.get_initial_info()
+                        state['action'] = action
+                        state['reward'] = reward
+                        state['internal_state'] = internal_state
+
         return self._n_env_steps_total - before_env_steps
 
     def sample_rl_batch(self, batch_size):
@@ -936,6 +1258,13 @@ class Learner:
     def load_model(self, ckpt_path):
         self.agent.load_state_dict(torch.load(ckpt_path, map_location=ptu.device))
         print("load successfully from", ckpt_path)
+
+    def cleanup(self):
+        """Clean up resources, especially parallel environments."""
+        if hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
+            logger.log("Closing parallel environments...")
+            self.train_env_parallel.close()
+            logger.log("Parallel environments closed.")
     
     def save_ingeneral(self, log_perf):
         current_num_iters = self._n_env_steps_total // (self.num_rollouts_per_iter * self.max_trajectory_len)

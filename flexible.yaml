@@ -12,6 +12,7 @@ env:
   reward_conditioning: no
   goal_conditioning: yes_relative
   normalize_kwarg: true
+  num_parallel_workers: 18
 
 train:
   # sample complexity: BAMDP horizon * (num_init_rollouts_pool * num_train_tasks
