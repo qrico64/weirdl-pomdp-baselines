@@ -698,7 +698,20 @@ class Learner:
                     batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
                     batch_prev_actions = torch.cat([worker_states[wid]['action'] for wid in active_workers], dim=0)
                     batch_rewards = torch.cat([worker_states[wid]['reward'] for wid in active_workers], dim=0)
-                    batch_internal_states = [worker_states[wid]['internal_state'] for wid in active_workers]
+
+                    # Batch internal states properly
+                    # internal_state can be either:
+                    # - GRU: (num_layers, batch_size, hidden_size) tensor
+                    # - LSTM: tuple of (hidden, cell) each (num_layers, batch_size, hidden_size)
+                    individual_states = [worker_states[wid]['internal_state'] for wid in active_workers]
+                    if isinstance(individual_states[0], tuple):
+                        # LSTM: (hidden, cell)
+                        batch_hidden = torch.cat([s[0] for s in individual_states], dim=1)
+                        batch_cell = torch.cat([s[1] for s in individual_states], dim=1)
+                        batch_internal_states = (batch_hidden, batch_cell)
+                    else:
+                        # GRU: just hidden
+                        batch_internal_states = torch.cat(individual_states, dim=1)
 
                     # Batch forward pass through policy
                     (batch_actions, _, _, _), batch_new_internal_states = self.agent.act(
@@ -712,7 +725,16 @@ class Learner:
                     # Distribute results back to workers
                     for idx, worker_id in enumerate(active_workers):
                         worker_actions[worker_id] = batch_actions[idx:idx+1]
-                        worker_states[worker_id]['internal_state'] = batch_new_internal_states[idx] if isinstance(batch_new_internal_states, list) else [s[idx:idx+1] for s in batch_new_internal_states]
+                        # Split batched internal states back to individual workers
+                        if isinstance(batch_new_internal_states, tuple):
+                            # LSTM: extract hidden and cell for this worker
+                            worker_states[worker_id]['internal_state'] = (
+                                batch_new_internal_states[0][:, idx:idx+1, :],
+                                batch_new_internal_states[1][:, idx:idx+1, :]
+                            )
+                        else:
+                            # GRU: extract hidden for this worker
+                            worker_states[worker_id]['internal_state'] = batch_new_internal_states[:, idx:idx+1, :]
                 else:
                     # For Markov agents, simply batch observations
                     batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
