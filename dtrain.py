@@ -36,10 +36,26 @@ def main(argv=None):
     print(f"Remote:        {remote_name}")
     # print(f"New branch:    {new_branch_name}")
 
-    infra.copy_repo_withfilters(git_root, git_copy_dir, use_hardlinks=True, excludes=['experiments', 'slurm', 'logs'])
+    infra.copy_repo_withfilters(git_root, git_copy_dir, use_hardlinks=False, excludes=['experiments', 'slurm', 'logs', 'viz'])
     new_dir_size = infra.format_size(infra.get_directory_size(git_copy_dir, False))
     print(f"Size:          {new_dir_size}.")
     print("------ Copied Repository Into Run Dir ------\n")
+
+    # Convert any relative paths in payload to absolute paths based on git_copy_dir
+    absolute_payload = []
+    for arg in args.payload[1:]:
+        # Check if the argument is an absolute path
+        if not os.path.exists(arg):
+            absolute_payload.append(arg)
+            continue
+        if os.path.isabs(arg):
+            abs_path = arg
+        else:
+            abs_path = git_copy_dir / arg
+        assert abs_path.exists(), f"Path does not exist: {abs_path}"
+        print(f"{arg} ===> {str(abs_path)}")
+        absolute_payload.append(str(abs_path))
+    payload_str = ' '.join(absolute_payload)
 
     # TODO: Not going to push the branch because I think that'll be too annoying.
 
@@ -72,7 +88,7 @@ echo
 echo
 
 # Run your program
-{' '.join(args.payload[1:])} --j {args.j} --log_folder {log_dir}
+{payload_str} --j {args.j} --log_folder {log_dir}
 """
     slurm_file = os.path.join(log_dir, "c.slurm")
     with open(slurm_file, "w") as fi:
