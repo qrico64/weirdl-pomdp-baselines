@@ -79,17 +79,18 @@ def plot_data(csv: str, xs, ys, column='metrics/success_rate_eval'):
     print(out)
 
 
-def plot_comparison(out: str, csvs: list, column, labels: list = None, title: str = None):
+def plot_comparison(out: str, parents: list, column, labels: list = None, title: str = None):
     assert out.startswith(f"viz/{helpers.today_str()}/")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     assert os.path.basename(out).endswith(".png")
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    for idx, csv in enumerate(csvs):
+    for idx, parent in enumerate(parents):
+        csv = os.path.join(parent, "progress.csv")
+        assert os.path.exists(csv), f"{csv}"
         xs, ys = compile_data(csv, column)
-        csv = Path(csv)
-        ax.plot(xs, ys, marker="o", linewidth=1.2, label=labels[idx] if labels is not None else csv.parent.name)
+        ax.plot(xs, ys, marker="o", linewidth=1.2, label=labels[idx] if labels is not None else os.path.basename(parent))
 
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
@@ -115,7 +116,7 @@ def plot_comparison(out: str, csvs: list, column, labels: list = None, title: st
     print(out)
 
     with open(os.path.join(os.path.dirname(out), os.path.basename(out)[:-4] + ".log"), "w") as fi:
-        fi.write(f"{str(csvs)}\n{str(labels)}")
+        fi.write(f"{str(parents)}\n{str(labels)}")
     print()
 
 
@@ -192,11 +193,23 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # plot_comparison("viz/oct27/quarter_16task_goal_identical_train.png", [
-    #     "experiments/oct24/oct24_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal/progress.csv",
-    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal/progress.csv",
+    # plot_comparison("viz/oct27/debug_variance_train.png", [
+    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal",
+    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal_debug_1",
+    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal_debug_2",
+    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal_debug_3_cpu2",
+    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal_debug_4_cpu2_numrollouts16",
+    #     "experiments/oct24/oct24_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal",
+    #     # "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal_normal_01_cpu11",
+    #     # "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal_normal_04_cpu11",
     # ], column="metrics/return_train_total", labels=[
+    #     "goal",
+    #     "goal_debug_1",
+    #     "goal_debug_2",
+    #     "goal_debug_3_cpu2",
+    #     "goal_debug_4_cpu2_numrollouts16",
     #     "oct24",
-    #     "oct27"
-    # ], title="Same Thing")
+    #     # "goal_normal_01_cpu11",
+    #     # "goal_normal_04_cpu11",
+    # ], title="Debugging Variance (Train)")
 
