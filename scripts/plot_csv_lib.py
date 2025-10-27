@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import numpy as np
+from utils import helpers
 
 from scripts.delete_empties import env_steps_all_empty
 
@@ -78,7 +79,11 @@ def plot_data(csv: str, xs, ys, column='metrics/success_rate_eval'):
     print(out)
 
 
-def plot_comparison(out: str, csvs: list, column, labels: list = None):
+def plot_comparison(out: str, csvs: list, column, labels: list = None, title: str = None):
+    assert out.startswith(f"viz/{helpers.today_str()}/")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    assert os.path.basename(out).endswith(".png")
+
     fig, ax = plt.subplots(figsize=(8, 5))
 
     for idx, csv in enumerate(csvs):
@@ -89,7 +94,7 @@ def plot_comparison(out: str, csvs: list, column, labels: list = None):
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
     ax.set_ylabel(FILE_NAMES[column][1])
-    ax.set_title(f"Environment Steps vs. {FILE_NAMES[column][1]}")
+    ax.set_title(title or f"Environment Steps vs. {FILE_NAMES[column][1]}")
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend()
 
@@ -108,6 +113,10 @@ def plot_comparison(out: str, csvs: list, column, labels: list = None):
 
     fig.savefig(out, dpi=200)
     print(out)
+
+    with open(os.path.join(os.path.dirname(out), os.path.basename(out)[:-4] + ".log"), "w") as fi:
+        fi.write(f"{str(csvs)}\n{str(labels)}")
+    print()
 
 
 
@@ -183,11 +192,11 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # plot_comparison("normalized_vs_nonnormalized.png", [
+    # plot_comparison("viz/oct27/quarter_16task_goal_identical_train.png", [
     #     "experiments/oct24/oct24_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal/progress.csv",
-    #     "experiments/oct24/oct24_nonparallel_antdir_circle_down_up_norm_16tasks_goal_relative/progress.csv",
-    # ], column="metrics/return_eval_total", labels=[
-    #     "normalized_non_relative",
-    #     "nonnormalized_non_relative",
-    # ])
+    #     "experiments/oct27/oct27_nonparallel_antdir_circle_down_quarter_norm_16tasks_goal/progress.csv",
+    # ], column="metrics/return_train_total", labels=[
+    #     "oct24",
+    #     "oct27"
+    # ], title="Same Thing")
 
