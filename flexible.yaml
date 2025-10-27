@@ -1,16 +1,16 @@
-seed: 1
+seed: 40
 cuda: 0 # use_gpu
 env:
   env_type: meta
   env_name: AntDir-v0
   max_rollouts_per_task: 2 # k=2, H=200, H^+ =400
 
-  num_tasks: 36
-  num_train_tasks: 16
+  num_tasks: 25
+  num_train_tasks: 5
   num_eval_tasks: 20
   task_mode: circle_down_quarter
   reward_conditioning: no
-  goal_conditioning: yes_relative
+  goal_conditioning: yes
   normalize_kwarg: true
   num_parallel_workers: 18
 
@@ -22,7 +22,7 @@ train:
     # now makes it same as env steps
   num_iters: 3000
   num_init_rollouts_pool: 500 # before training
-  num_rollouts_per_iter: 25  #
+  num_rollouts_per_iter: 30  #
   buffer_size: 1e6
 
   num_updates_per_iter: 0.02 # equal, or positive integer
@@ -59,6 +59,6 @@ policy:
   td3:
     ## since we normalize action space to [-1, 1]
     ## the noise std is absolute value
-    exploration_noise: 0.1 
+    exploration_noise: 0.1
     target_noise: 0.2
     target_noise_clip: 0.5
