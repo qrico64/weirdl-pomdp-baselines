@@ -218,7 +218,6 @@ class Learner:
 
         # For non-meta environments, set train_env_parallel to None
         if not hasattr(self, 'train_env_parallel'):
-            breakpoint()
             self.train_env_parallel = None
 
         # get action / observation dimensions
@@ -293,6 +292,21 @@ class Learner:
         nominal_model_config_file: str = None,
         **kwargs
     ):
+        self.use_nominals = use_nominals
+        self.nominal_model_config_file = nominal_model_config_file
+        if self.use_nominals:
+            assert self.nominal_model_config_file is not None
+            assert os.path.isabs(self.nominal_model_config_file), f"Must be absolute: {self.nominal_model_config_file}"
+            assert os.path.exists(self.nominal_model_config_file), f"Must exist: {self.nominal_model_config_file}"
+            self.nominal_model = pull_model(self.nominal_model_config_file, "latest", {})
+            self.nominal_trajectories = {}
+            for task in np.concatenate([self.train_tasks, self.eval_tasks], axis=0):
+                task_info = self.train_env.unwrapped.tasks[task]
+                rollouts = self.nominal_model.rollout_model(1, task_info, True)[0]
+                self.nominal_trajectories[task] = rollouts
+        logger.log(f"Updated max_trajectory_len from {self.max_trajectory_len} to {self.max_trajectory_len + self.train_env.env._max_episode_steps}.")
+        self.max_trajectory_len += self.train_env.env._max_episode_steps
+        # self.nominal_trajectories = {int: {'observations': [Tensor[1, 28]], 'rewards': [Tensor[1,1]]}}
 
         if num_updates_per_iter is None:
             num_updates_per_iter = 1.0
@@ -344,15 +358,6 @@ class Learner:
             self.n_env_steps_total,
         )
 
-        self.use_nominals = use_nominals
-        self.nominal_model_config_file = nominal_model_config_file
-        if self.use_nominals:
-            self.nominal_model = pull_model(self.nominal_model_config_file, "latest", {})
-            self.nominal_trajectories = {}
-            for task in np.concatenate([self.train_tasks, self.eval_tasks], axis=0):
-                task_info = self.train_env.unwrapped.tasks[task]
-                rollouts = self.nominal_model.rollout_model(1, task_info, True)[0]
-                self.nominal_trajectories[task] = rollouts
 
     def init_eval(
         self,
@@ -396,8 +401,6 @@ class Learner:
                 < self.num_init_rollouts_pool * self.max_trajectory_len
             ):
                 # Use parallel collection if available
-                if not hasattr(self, 'train_env_parallel'):
-                    breakpoint()
                 if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
                     self.collect_rollouts_parallel(
                         num_rollouts=min(self.num_parallel_workers,
@@ -641,6 +644,8 @@ class Learner:
                     'action': None,
                     'reward': None,
                     'internal_state': None,
+                    'task': None,
+                    'nominal_length': None,
                 }
 
         # INITIAL RESET: Send reset commands to ALL workers (non-blocking)
@@ -649,6 +654,7 @@ class Learner:
                 task = self.train_tasks[np.random.randint(len(self.train_tasks))]
             else:
                 task = None
+            worker_states[worker_id]['task'] = task
             parallel_env.remotes[worker_id].send(('reset', {'task': task}))
 
         # Collect ALL reset responses (workers reset in parallel)
@@ -673,6 +679,23 @@ class Learner:
                 worker_states[worker_id]['action'] = action
                 worker_states[worker_id]['reward'] = reward
                 worker_states[worker_id]['internal_state'] = internal_state
+
+            if self.use_nominals:
+                task = worker_states[worker_id]['task']
+                nominal_trajectory: dict = self.nominal_trajectories[task]
+                virtual_rollout: dict = self.rollout_model_virtually([nominal_trajectory], False)[0]
+                assert worker_states[worker_id]['action'].shape == virtual_rollout['actions'][-1].shape
+                worker_states[worker_id]['action'] = virtual_rollout['actions'][-1]
+                assert worker_states[worker_id]['internal_state'].shape == virtual_rollout['internal_states'][-1].shape
+                worker_states[worker_id]['internal_state'] = virtual_rollout['internal_states'][-1]
+                assert worker_states[worker_id]['reward'].shape == nominal_trajectory['rewards'][-1].shape
+                worker_states[worker_id]['reward'] = nominal_trajectory['rewards'][-1]
+                worker_states[worker_id]['obs_list'] += nominal_trajectory['observations']
+                worker_states[worker_id]['act_list'] += nominal_trajectory['actions']
+                worker_states[worker_id]['rew_list'] += nominal_trajectory['rewards']
+                worker_states[worker_id]['next_obs_list'] += nominal_trajectory['next_observations']
+                worker_states[worker_id]['term_list'] += [False for _ in range(len(nominal_trajectory['observations']))]
+                worker_states[worker_id]['nominal_length'] = len(nominal_trajectory['observations'])
 
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
@@ -834,16 +857,20 @@ class Learner:
                         if not self.act_continuous:
                             act_buffer = torch.argmax(act_buffer, dim=-1, keepdims=True)
 
+                        nominals = None if state['nominal_length'] is None else np.arange(len(state['obs_list'])) < state['nominal_length']
                         self.policy_storage.add_episode(
                             observations=ptu.get_numpy(torch.cat(state['obs_list'], dim=0)),
                             actions=ptu.get_numpy(act_buffer),
                             rewards=ptu.get_numpy(torch.cat(state['rew_list'], dim=0)),
                             terminals=np.array(state['term_list']).reshape(-1, 1),
                             next_observations=ptu.get_numpy(torch.cat(state['next_obs_list'], dim=0)),
+                            nominals=nominals,
                         )
                         print(
                             f"worker_{worker_id} steps: {state['steps']} term: {term} "
                             f"ret: {torch.cat(state['rew_list'], dim=0).sum().item():.2f}"
+                            f" step: {len(state['obs_list'])}"
+                            + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
                         )
 
                     # Update statistics
@@ -946,6 +973,7 @@ class Learner:
             observations = None
 
         for task_idx, task in enumerate(tasks):
+
             step = 0
 
             if self.env_type == "meta" and self.eval_env.n_tasks is not None:
@@ -959,6 +987,16 @@ class Learner:
             if self.agent_arch == AGENT_ARCHS.Memory:
                 # assume initial reward = 0.0
                 action, reward, internal_state = self.agent.get_initial_info()
+            
+            if self.use_nominals:
+                nominal_trajectory: dict = self.nominal_trajectories[task]
+                virtual_rollout: dict = self.rollout_model_virtually([nominal_trajectory], False)[0]
+                assert action.shape == virtual_rollout['actions'][-1].shape
+                action = virtual_rollout['actions'][-1]
+                assert internal_state.shape == virtual_rollout['internal_states'][-1].shape
+                internal_state = virtual_rollout['internal_states'][-1]
+                assert reward.shape == nominal_trajectory['rewards'][-1].shape
+                reward = nominal_trajectory['rewards'][-1]
 
             episodes_infos = []
             episodes_infos_rewards = []
@@ -1438,6 +1476,71 @@ class Learner:
         except Exception as e:
             logger.log(f"Failed to load from {agent_file.resolve()}: {e}")
             raise
+
+    @torch.no_grad()
+    def rollout_model_virtually(self, results: list, deterministic=False):
+        """
+        Roll out the current RNN over a pre-recorded trajectory.
+
+        Args:
+            results: List of trajectory dictionaries with the same format as rollout_model output.
+                    Each dict contains 'observations', 'actions', 'rewards', 'dones', 'next_observations'.
+            deterministic: Whether to use deterministic actions (default: False)
+
+        Returns:
+            List of dictionaries, each containing:
+                - 'actions': list of action tensors generated by the current policy
+                - 'internal_states': list of internal states (for memory-based agents)
+        """
+        virtual_results = []
+
+        for trajectory in results:
+            virtual_trajectory = {
+                'actions': [],
+                'internal_states': [],
+            }
+
+            # Get the observations from the pre-recorded trajectory
+            trajectory_obs = trajectory['observations']
+            trajectory_rewards = trajectory['rewards']
+
+            # Initialize agent state for memory-based agents
+            if self.agent_arch == AGENT_ARCHS.Memory:
+                action, reward, internal_state = self.agent.get_initial_info()
+
+            # Roll out the policy over the trajectory
+            for step_idx in range(len(trajectory_obs)):
+                obs = trajectory_obs[step_idx]
+
+                # Ensure obs has batch dimension
+                if obs.dim() == 1:
+                    obs = obs.unsqueeze(0)
+
+                # Get action from current policy
+                if self.agent_arch == AGENT_ARCHS.Memory:
+                    (action, _, _, _), internal_state = self.agent.act(
+                        prev_internal_state=internal_state,
+                        prev_action=action,
+                        reward=reward,
+                        obs=obs,
+                        deterministic=deterministic,
+                    )
+                    # Use the trajectory's actual reward for the next step
+                    reward = trajectory_rewards[step_idx]
+
+                    # Store internal state
+                    virtual_trajectory['internal_states'].append(internal_state)
+                else:
+                    action, _, _, _ = self.agent.act(
+                        obs, deterministic=deterministic
+                    )
+
+                # Store the generated action
+                virtual_trajectory['actions'].append(action)
+
+            virtual_results.append(virtual_trajectory)
+
+        return virtual_results
     
     def rollout_model(self, num_episodes: int, task_dict: dict, deterministic=False):
         results = []
@@ -1489,7 +1592,7 @@ class Learner:
                     reward = torch.tanh(reward)
 
                 current['observations'].append(obs)
-                current['actions'].append(action.squeeze(dim=0))
+                current['actions'].append(action)
                 current['rewards'].append(reward)
                 current['dones'].append(done)
                 current['next_observations'].append(next_obs)

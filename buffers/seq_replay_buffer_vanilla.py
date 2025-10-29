@@ -54,6 +54,8 @@ class SeqReplayBuffer:
         # See _compute_valid_starts function for details
         self._valid_starts = np.zeros((max_replay_buffer_size), dtype=np.float32)
 
+        self._nominal_steps = np.zeros((max_replay_buffer_size), dtype=np.uint8)
+
         assert sampled_seq_len >= 2
         assert sample_weight_baseline >= 0.0
         self._sampled_seq_len = sampled_seq_len
@@ -74,7 +76,7 @@ class SeqReplayBuffer:
         self._top = 0  # trajectory level (first dim in 3D buffer)
         self._size = 0  # trajectory level (first dim in 3D buffer)
 
-    def add_episode(self, observations, actions, rewards, terminals, next_observations):
+    def add_episode(self, observations, actions, rewards, terminals, next_observations, nominals=None):
         """
         NOTE: must add one whole episode/sequence/trajectory,
                         not some partial transitions
@@ -104,6 +106,11 @@ class SeqReplayBuffer:
         self._next_observations[indices] = next_observations
 
         self._valid_starts[indices] = self._compute_valid_starts(seq_len)
+
+        if nominals is not None:
+            assert nominals.shape == (seq_len,)
+            assert nominals.dtype == np.bool8
+            self._nominal_steps[indices] = nominals
 
         self._top = (self._top + seq_len) % self._max_replay_buffer_size
         self._size = min(self._size + seq_len, self._max_replay_buffer_size)
@@ -227,6 +234,10 @@ class SeqReplayBuffer:
 
         # set invalids in the masks
         masks[invalid_indices_b, invalid_indices_t] = 0.0
+
+        # mask out nominal steps (expert trajectories)
+        nominals = np.copy(self._nominal_steps[indices]).reshape(batch_size, self._sampled_seq_len)
+        masks[nominals == 1] = 0.0
 
         return masks
 
