@@ -10,10 +10,9 @@ env:
   num_eval_tasks: 20
   task_mode: circle_down_quarter
   reward_conditioning: no
-  goal_conditioning: yes_relative_noise
-  goal_noise_magnitude: 0.2
+  goal_conditioning: yes
   normalize_kwarg: true
-  num_parallel_workers: 11
+  num_parallel_workers: 18
 
 train:
   # sample complexity: BAMDP horizon * (num_init_rollouts_pool * num_train_tasks
@@ -30,10 +29,12 @@ train:
   batch_size: 32 # to tune based on sampled_seq_len
   sampled_seq_len: -1 # -1 is all, or positive integer
   sample_weight_baseline: 0.0
+  use_nominals: true
+  nominal_model_config_file: /mmfs1/gscratch/stf/qirico/All/All-Weird/A/Meta-Learning-25-10-1/weirdl-pomdp-baselines/experiments/oct20/oct20_2_antdir_circle_inftasks_numiter9k_goal/variant_80854_30193067.yml
 
 eval:
   eval_stochastic: false # also eval stochastic policy
-  log_interval: 64 # num of iters
+  log_interval: 16 # num of iters
   save_interval: 512
   log_tensorboard: true
 
