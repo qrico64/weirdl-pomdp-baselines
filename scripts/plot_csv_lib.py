@@ -87,10 +87,45 @@ def plot_comparison(out: str, parents: list, column, labels: list = None, title:
     fig, ax = plt.subplots(figsize=(8, 5))
 
     for idx, parent in enumerate(parents):
-        csv = os.path.join(parent, "progress.csv")
-        assert os.path.exists(csv), f"{csv}"
-        xs, ys = compile_data(csv, column)
-        ax.plot(xs, ys, marker="o", linewidth=1.2, label=labels[idx] if labels is not None else os.path.basename(parent))
+        # Check if parent is a list of paths (for aggregation) or a single path
+        if isinstance(parent, list):
+            # Aggregate multiple runs: compute mean and std
+            all_xs = []
+            all_ys = []
+
+            for p in parent:
+                csv = os.path.join(p, "progress.csv")
+                assert os.path.exists(csv), f"{csv}"
+                xs, ys = compile_data(csv, column)
+                all_xs.append(xs)
+                all_ys.append(ys)
+
+            # Find common x-axis (use the shortest one or interpolate)
+            # For simplicity, we'll use interpolation to align all runs to a common x-axis
+            min_x = max([xs[0] for xs in all_xs])
+            max_x = min([xs[-1] for xs in all_xs])
+            common_xs = np.linspace(min_x, max_x, 100)
+
+            # Interpolate all runs to common x-axis
+            interpolated_ys = []
+            for xs, ys in zip(all_xs, all_ys):
+                interp_ys = np.interp(common_xs, xs, ys)
+                interpolated_ys.append(interp_ys)
+
+            # Compute mean and std
+            interpolated_ys = np.array(interpolated_ys)
+            mean_ys = np.mean(interpolated_ys, axis=0)
+            std_ys = np.std(interpolated_ys, axis=0)
+
+            label = labels[idx] if labels is not None else f"Aggregated {idx}"
+            line = ax.plot(common_xs, mean_ys, linewidth=1.5, label=label)
+            ax.fill_between(common_xs, mean_ys - std_ys, mean_ys + std_ys, alpha=0.3, color=line[0].get_color())
+        else:
+            # Single run: plot as before
+            csv = os.path.join(parent, "progress.csv")
+            assert os.path.exists(csv), f"{csv}"
+            xs, ys = compile_data(csv, column)
+            ax.plot(xs, ys, marker="o", linewidth=1.2, label=labels[idx] if labels is not None else os.path.basename(parent))
 
     # Labels & cosmetics
     ax.set_xlabel("Environment Steps")
