@@ -207,16 +207,29 @@ class TensorBoardOutputFormat(KVWriter):
             self.writer = None
 
 
+def ensure_norepeat(path: str):
+    if not osp.exists(path):
+        return path
+    k = 1
+    for i in range(100):
+        basename = osp.basename(path).split('.')
+        assert len(basename) == 2, f"{basename}"
+        newpath = osp.join(osp.dirname(path), f"{basename[0]}-{k}.{basename[1]}")
+        if not osp.exists(newpath):
+            return newpath
+    raise Exception(f"{path}")
+
+
 def make_output_format(format, ev_dir, log_suffix=""):
     os.makedirs(ev_dir, exist_ok=True)
     if format == "stdout":
         return HumanOutputFormat(sys.stdout)
     elif format == "log":
-        return HumanOutputFormat(osp.join(ev_dir, "experiment%s.log" % log_suffix))
+        return HumanOutputFormat(ensure_norepeat(osp.join(ev_dir, "experiment%s.log" % log_suffix)))
     elif format == "json":
-        return JSONOutputFormat(osp.join(ev_dir, "progress.json"))
+        return JSONOutputFormat(ensure_norepeat(osp.join(ev_dir, "progress.json")))
     elif format == "csv":
-        return CSVOutputFormat(osp.join(ev_dir, "progress.csv"))
+        return CSVOutputFormat(ensure_norepeat(osp.join(ev_dir, "progress.csv")))
     elif format == "tensorboard":
         return TensorBoardOutputFormat(ev_dir)
     else:
