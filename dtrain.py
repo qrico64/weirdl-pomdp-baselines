@@ -49,7 +49,7 @@ def main(argv=None):
             absolute_payload.append(arg)
             continue
         if os.path.isabs(arg):
-            abs_path = arg
+            abs_path = Path(arg)
         else:
             abs_path = git_copy_dir / arg
         assert abs_path.exists(), f"Path does not exist: {abs_path}"

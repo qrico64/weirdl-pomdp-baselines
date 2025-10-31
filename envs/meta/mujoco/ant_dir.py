@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Literal
+from utils import logger
 
 from .ant_multitask_base import MultitaskAntEnv
 from utils import helpers
@@ -39,6 +40,17 @@ class AntDirEnv(MultitaskAntEnv):
         self.infinite_tasks = infinite_tasks
         self._goal_noise = 0.0
         self.normalize_kwarg = normalize_kwarg
+
+        logger.log("\n****** Creating AntDir Environment ******")
+        logger.log(f"num_train_tasks: {self.num_train_tasks}")
+        logger.log(f"num_eval_tasks: {self.num_eval_tasks}")
+        logger.log(f"task_mode: {self.task_mode}")
+        logger.log(f"goal_conditioning: {self.goal_conditioning}")
+        logger.log(f"goal_noise_magnitude: {self.goal_noise_magnitude}")
+        logger.log(f"goal_noise_type: {self.goal_noise_type}")
+        logger.log(f"infinite_tasks: {self.infinite_tasks}")
+        logger.log(f"normalize_kwarg: {self.normalize_kwarg}")
+        logger.log("****** Created AntDir Environment ******\n")
 
         super(AntDirEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
     

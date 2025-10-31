@@ -53,6 +53,7 @@ class Learner:
         eval_envs=None,
         worst_percentile=None,
         num_parallel_workers=1,
+        eval_env: dict = {},
         **kwargs
     ):
 
@@ -94,7 +95,15 @@ class Learner:
             else:
                 self.train_env_parallel = None
 
-            self.eval_env = self.train_env
+            # Merge kwargs and eval_env, with eval_env taking precedence
+            self.eval_env = make_env(
+                env_name,
+                max_rollouts_per_task,
+                seed=self.seed,
+                num_train_tasks=num_train_tasks,
+                num_eval_tasks=num_eval_tasks,
+                **{**kwargs, **eval_env},
+            )
             self.eval_env.seed(self.seed + 1)
 
             if self.train_env.n_tasks is not None:
@@ -304,8 +313,8 @@ class Learner:
                 task_info = self.train_env.unwrapped.tasks[task]
                 rollouts = self.nominal_model.rollout_model(1, task_info, True)[0]
                 self.nominal_trajectories[task] = rollouts
-        logger.log(f"Updated max_trajectory_len from {self.max_trajectory_len} to {self.max_trajectory_len + self.train_env.env._max_episode_steps}.")
-        self.max_trajectory_len += self.train_env.env._max_episode_steps
+            logger.log(f"Updated max_trajectory_len from {self.max_trajectory_len} to {self.max_trajectory_len + self.train_env.env._max_episode_steps}.")
+            self.max_trajectory_len += self.train_env.env._max_episode_steps
         # self.nominal_trajectories = {int: {'observations': [Tensor[1, 28]], 'rewards': [Tensor[1,1]]}}
 
         if num_updates_per_iter is None:
