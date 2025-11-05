@@ -22,7 +22,11 @@ ENV_STEPS_COL = "z/env_steps"
 
 def compile_data(csv: str, column):
     # Read CSV with a tolerant parser (handles ragged rows like your sample)
-    df = pd.read_csv(csv, engine="python")
+    try:
+        df = pd.read_csv(csv, engine="python")
+    except:
+        print(f"Error when reading {csv}")
+        raise
 
     # Validate necessary columns
     missing = [c for c in (ENV_STEPS_COL, column) if c not in df.columns]
@@ -100,26 +104,39 @@ def plot_comparison(out: str, parents: list, column, labels: list = None, title:
                 all_xs.append(xs)
                 all_ys.append(ys)
 
-            # Find common x-axis (use the shortest one or interpolate)
-            # For simplicity, we'll use interpolation to align all runs to a common x-axis
+            # Find common x-axis extending to the maximum across all runs
             min_x = max([xs[0] for xs in all_xs])
-            max_x = min([xs[-1] for xs in all_xs])
+            max_x = max([xs[-1] for xs in all_xs])  # Changed from min to max
             common_xs = np.linspace(min_x, max_x, 100)
 
-            # Interpolate all runs to common x-axis
+            # Interpolate all runs to common x-axis, but mark points outside each run's range
             interpolated_ys = []
             for xs, ys in zip(all_xs, all_ys):
-                interp_ys = np.interp(common_xs, xs, ys)
+                # Only interpolate within the valid range of this run
+                interp_ys = np.full_like(common_xs, np.nan, dtype=float)
+                # Find indices within this run's x-range
+                valid_mask = (common_xs >= xs[0]) & (common_xs <= xs[-1])
+                interp_ys[valid_mask] = np.interp(common_xs[valid_mask], xs, ys)
                 interpolated_ys.append(interp_ys)
 
-            # Compute mean and std
+            # Compute mean and std at each point, using only available runs
             interpolated_ys = np.array(interpolated_ys)
-            mean_ys = np.mean(interpolated_ys, axis=0)
-            std_ys = np.std(interpolated_ys, axis=0)
+            mean_ys = np.nanmean(interpolated_ys, axis=0)
+            std_ys = np.nanstd(interpolated_ys, axis=0)
+
+            # Count how many runs are available at each point
+            n_runs_available = np.sum(~np.isnan(interpolated_ys), axis=0)
 
             label = labels[idx] if labels is not None else f"Aggregated {idx}"
             line = ax.plot(common_xs, mean_ys, linewidth=1.5, label=label)
-            ax.fill_between(common_xs, mean_ys - std_ys, mean_ys + std_ys, alpha=0.3, color=line[0].get_color())
+
+            # Only show error region where we have more than 1 run
+            for i in range(len(common_xs) - 1):
+                if n_runs_available[i] > 1 and n_runs_available[i+1] > 1:
+                    ax.fill_between(common_xs[i:i+2],
+                                    mean_ys[i:i+2] - std_ys[i:i+2],
+                                    mean_ys[i:i+2] + std_ys[i:i+2],
+                                    alpha=0.3, color=line[0].get_color())
         else:
             # Single run: plot as before
             csv = os.path.join(parent, "progress.csv")
