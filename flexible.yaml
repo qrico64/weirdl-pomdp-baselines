@@ -1,4 +1,4 @@
-seed: 42
+seed: 41
 cuda: 0 # use_gpu
 env:
   env_type: meta
@@ -11,7 +11,7 @@ env:
   task_mode: circle_down_up
   reward_conditioning: no
   goal_conditioning: fixed_noise
-  goal_noise_magnitude: 0.4
+  goal_noise_magnitude: 0.1
   normalize_kwarg: true
   num_parallel_workers: 16
 

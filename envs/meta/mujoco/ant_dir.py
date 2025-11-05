@@ -22,7 +22,7 @@ class AntDirEnv(MultitaskAntEnv):
         reward_conditioning: Literal["no", "yes"] = "no",
         goal_conditioning: Literal["no", "yes", "fixed_noise", "yes_relative", "yes_relative_noise"] = "no",
         goal_noise_magnitude: float = 0,
-        goal_noise_type: Literal["normal", "uniform"] = "normal",
+        goal_noise_type: Literal["normal", "uniform", "constrained_normal"] = "normal",
         infinite_tasks: Literal["no", "yes"] = "no",
         normalize_kwarg: bool = False,
         forward_backward=True,
@@ -186,6 +186,9 @@ class AntDirEnv(MultitaskAntEnv):
             self._goal_noise = np.random.randn() * self.goal_noise_magnitude
         elif self.goal_noise_type == "uniform":
             self._goal_noise = np.random.uniform(-1, 1) * self.goal_noise_magnitude
+        elif self.goal_noise_type == "constrained_normal":
+            self._goal_noise = np.random.randn() * self.goal_noise_magnitude
+            self._goal_noise = np.clip(self._goal_noise, -self.goal_noise_magnitude, self.goal_noise_magnitude)
         else:
             self._goal_noise = 0.0
         
