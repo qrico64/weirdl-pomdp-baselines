@@ -5,12 +5,12 @@ env:
   env_name: AntDir-v0
   max_rollouts_per_task: 2 # k=2, H=200, H^+ =400
 
-  num_tasks: 36
-  num_train_tasks: 16
+  num_tasks: 24
+  num_train_tasks: 4
   num_eval_tasks: 20
-  task_mode: circle
+  task_mode: circle_down_up
   reward_conditioning: no
-  goal_conditioning: yes
+  goal_conditioning: no
   normalize_kwarg: true
   num_parallel_workers: 16
 

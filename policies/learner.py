@@ -291,6 +291,18 @@ class Learner:
         ).to(ptu.device)
         logger.log(self.agent)
 
+        # Create a separate agent instance for rollouts to avoid reading partially updated weights
+        # This agent will be synced with self.agent at the start of each rollout collection
+        self.rollout_agent = agent_class(
+            encoder=rnn_encoder_type,
+            obs_dim=self.obs_dim,
+            action_dim=self.act_dim,
+            image_encoder_fn=image_encoder_fn,
+            max_len=max_len,
+            **kwargs,
+        ).to(ptu.device)
+        self.rollout_agent.eval()  # Always in eval mode
+
         self.reward_clip = reward_clip  # for atari
 
     def init_train(
@@ -411,9 +423,9 @@ class Learner:
         self._start_training()
 
         # Perform initial evaluation before training for debugging
-        logger.log("Performing initial evaluation before training...")
-        initial_perf = self.log()
-        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+        # logger.log("Performing initial evaluation before training...")
+        # initial_perf = self.log()
+        # logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
@@ -447,6 +459,28 @@ class Learner:
                 self.log_train_stats(train_stats)
 
         last_eval_num_iters = 0
+
+        # Setup for parallelizing collection and updates
+        collection_queue = Queue(maxsize=1)  # Store (env_steps, should_update) tuples
+        update_thread = None
+
+        def update_worker():
+            """Worker function that performs updates in a separate thread"""
+            while True:
+                item = collection_queue.get()
+                if item is None:  # Sentinel value to stop thread
+                    break
+                env_steps, num_updates = item
+                logger.log("Starting update in background thread...")
+                train_stats = self.update(num_updates)
+                self.log_train_stats(train_stats)
+                logger.log("Finished update in background thread")
+                collection_queue.task_done()
+
+        # Start update thread at the beginning
+        update_thread = threading.Thread(target=update_worker, daemon=True)
+        update_thread.start()
+
         while self._n_env_steps_total < self.n_env_steps_total:
             # collect data from num_rollouts_per_iter train tasks:
             # Use parallel collection if available
@@ -459,12 +493,19 @@ class Learner:
                 env_steps = self.collect_rollouts(num_rollouts=self.num_rollouts_per_iter)
             logger.log("env steps", self._n_env_steps_total)
 
-            train_stats = self.update(
+            # Calculate number of updates needed
+            num_updates = (
                 self.num_updates_per_iter
                 if isinstance(self.num_updates_per_iter, int)
                 else int(math.ceil(self.num_updates_per_iter * env_steps))
             )  # NOTE: ceil to make sure at least 1 step
-            self.log_train_stats(train_stats)
+
+            # Queue the update (will run in parallel with next collection)
+            # The put() will block if queue is full (previous update still running)
+            # This naturally synchronizes: can't queue update N+1 until update N finishes
+            print(f"Queueing update with {num_updates} steps...")
+            collection_queue.put((env_steps, num_updates))
+            print("Update queued, continuing to next collection...")
 
             # evaluate and log
             current_num_iters = self._n_env_steps_total // (
@@ -475,8 +516,19 @@ class Learner:
                 and current_num_iters % self.log_interval == 0
             ):
                 last_eval_num_iters = current_num_iters
+                # Wait for any pending updates before evaluation
+                print("Waiting for update to complete before evaluation...")
+                collection_queue.join()
                 perf = self.log()
                 self.save_ingeneral(perf)
+
+        # Wait for final update to complete
+        print("Waiting for final update to complete...")
+        collection_queue.join()
+        collection_queue.put(None)  # Sentinel to stop worker
+        update_thread.join()
+        print("Update thread terminated")
+
         self.save_ingeneral(perf)
 
         # Clean up parallel environments
@@ -636,6 +688,10 @@ class Learner:
         if parallel_env is None:
             return self.collect_rollouts(num_rollouts, random_actions)
 
+        # Sync rollout_agent with current agent weights to get a consistent snapshot
+        # This avoids reading partially updated weights during parallel training
+        self.rollout_agent.load_state_dict(self.agent.state_dict())
+
         before_env_steps = self._n_env_steps_total
         num_workers = parallel_env.num_envs
 
@@ -694,7 +750,7 @@ class Learner:
                 worker_states[worker_id]['term_list'] = []
 
             if self.agent_arch == AGENT_ARCHS.Memory:
-                action, reward, internal_state = self.agent.get_initial_info()
+                action, reward, internal_state = self.rollout_agent.get_initial_info()
                 worker_states[worker_id]['action'] = action
                 worker_states[worker_id]['reward'] = reward
                 worker_states[worker_id]['internal_state'] = internal_state
@@ -717,7 +773,7 @@ class Learner:
                 worker_states[worker_id]['nominal_length'] = len(nominal_trajectory['observations'])
             
             if self.agent_arch == AGENT_ARCHS.Transformer:
-                action, reward = self.agent.get_initial_info()
+                action, reward = self.rollout_agent.get_initial_info()
                 worker_states[worker_id]['action'] = action
                 worker_states[worker_id]['reward'] = reward
 
@@ -761,7 +817,7 @@ class Learner:
                         batch_internal_states = torch.cat(individual_states, dim=1)
 
                     # Batch forward pass through policy
-                    (batch_actions, _, _, _), batch_new_internal_states = self.agent.act(
+                    (batch_actions, _, _, _), batch_new_internal_states = self.rollout_agent.act(
                         prev_internal_state=batch_internal_states,
                         prev_action=batch_prev_actions,
                         reward=batch_rewards,
@@ -783,10 +839,10 @@ class Learner:
                             # GRU: extract hidden for this worker
                             worker_states[worker_id]['internal_state'] = batch_new_internal_states[:, idx:idx+1, :]
                 elif self.agent_arch == AGENT_ARCHS.Transformer:
-                    batch_obs = torch.cat([torch.stack(worker_states[wid]['obs_list'] + [worker_states[wid]['obs']], dim=0) for wid in active_workers], dim=1)
-                    batch_prev_actions = torch.cat([torch.stack(worker_states[wid]['act_list'] + [worker_states[wid]['action']], dim=0) for wid in active_workers], dim=1)
-                    batch_rewards = torch.cat([torch.stack(worker_states[wid]['rew_list'] + [worker_states[wid]['reward']], dim=0) for wid in active_workers], dim=1)
-                    batch_actions, _, _, _ = self.agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=False)
+                    batch_obs = [torch.cat(worker_states[wid]['obs_list'] + [worker_states[wid]['obs']], dim=0) for wid in active_workers]
+                    batch_prev_actions = [torch.cat(worker_states[wid]['act_list'] + [worker_states[wid]['action']], dim=0) for wid in active_workers]
+                    batch_rewards = [torch.cat(worker_states[wid]['rew_list'] + [worker_states[wid]['reward']], dim=0) for wid in active_workers]
+                    batch_actions, _, _, _ = self.rollout_agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=False)
                     for idx, worker_id in enumerate(active_workers):
                         worker_actions[worker_id] = batch_actions[idx:idx+1]
                 else:
@@ -794,7 +850,7 @@ class Learner:
                     batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
 
                     # Batch forward pass through policy
-                    batch_actions, _, _, _ = self.agent.act(batch_obs, deterministic=False)
+                    batch_actions, _, _, _ = self.rollout_agent.act(batch_obs, deterministic=False)
 
                     # Distribute results back to workers
                     for idx, worker_id in enumerate(active_workers):
@@ -913,9 +969,8 @@ class Learner:
                     state['active'] = False
 
             # PHASE 5: Reset workers that finished episodes (in parallel)
-            if all(not worker_states[wid]['active'] for wid in worker_states.keys()):
-                workers_to_reset = [wid for wid in worker_states.keys() if worker_states[wid]['remaining_rollouts'] > 0]
-                print(f"Resetting workers {workers_to_reset}...")
+            workers_to_reset = [wid for wid in worker_states.keys() if worker_states[wid]['remaining_rollouts'] > 0 and not worker_states[wid]['active']]
+            if len(workers_to_reset) > 0:
                 # Send reset commands to all workers that need it (non-blocking)
                 for worker_id in workers_to_reset:
                     if self.env_type == "meta" and parallel_env.n_tasks is not None:
@@ -944,13 +999,13 @@ class Learner:
                         state['term_list'] = []
 
                     if self.agent_arch == AGENT_ARCHS.Memory:
-                        action, reward, internal_state = self.agent.get_initial_info()
+                        action, reward, internal_state = self.rollout_agent.get_initial_info()
                         state['action'] = action
                         state['reward'] = reward
                         state['internal_state'] = internal_state
-            
+
                     if self.agent_arch == AGENT_ARCHS.Transformer:
-                        action, reward = self.agent.get_initial_info()
+                        action, reward = self.rollout_agent.get_initial_info()
                         worker_states[worker_id]['action'] = action
                         worker_states[worker_id]['reward'] = reward
 
@@ -968,6 +1023,8 @@ class Learner:
     def update(self, num_updates):
         rl_losses_agg = {}
         for update in range(num_updates):
+            if update % 20 == 0 or update == num_updates - 1:
+                print(f"Updated {update} times.")
             # sample random RL batch: in transitions
             batch = self.sample_rl_batch(self.batch_size)
 
@@ -1123,10 +1180,8 @@ class Learner:
                 episodes_infos.append(running_obss)
                 episodes_infos_rewards.append(running_reward)
             total_steps[task_idx] = step
-            if "annotation" in dir(self.eval_env.unwrapped):
-                logger.log(f"\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation()}):")
-            logger.log(f"{episodes_infos}\n")
-            logger.log(f"{episodes_infos_rewards}\n")
+            to_log = f"""\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation() if 'annotation' in dir(self.eval_env.unwrapped) else ''}):\n{episodes_infos}\n{episodes_infos_rewards}\n"""
+            logger.log(to_log)
         return returns_per_episode, success_rate, observations, total_steps
 
     def log_train_stats(self, train_stats):

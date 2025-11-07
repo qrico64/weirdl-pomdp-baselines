@@ -56,7 +56,7 @@ def plot_trajectories_pointenv(dir: str):
                 else:
                     task_pos = env.goals[task_idx]
             trajectories = eval(lines_truncated[idx + 1])
-            trajectories = [np.array(trajectory) for trajectory in trajectories]
+            trajectories = [np.array(trajectory)[:,:2] for trajectory in trajectories]
             assert all(trajectory.ndim == 2 and trajectory.shape[1] == 2 for trajectory in trajectories), f"{[trajectory.shape for trajectory in trajectories]}"
             if env_step not in movement:
                 movement[env_step] = {}

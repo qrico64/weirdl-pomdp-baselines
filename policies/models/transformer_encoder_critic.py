@@ -87,9 +87,9 @@ class Critic_TransformerEncoder(nn.Module):
 
     def get_hidden_states(self, obs, prev_actions, rewards) -> torch.Tensor:
         T, N, _ = rewards.shape
-        assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
-        assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
-        assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
+        # assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
+        # assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
+        # assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
         obs_encs = self._get_obs_embedding(obs.reshape(T * N, self.obs_dim)).reshape(T, N, self.hidden_size)
         action_encs = self.action_embedder(prev_actions.reshape(T * N, self.action_dim)).reshape(T, N, self.hidden_size)
         reward_encs = self.reward_embedder(rewards.reshape(T * N, 1)).reshape(T, N, self.hidden_size)
@@ -114,21 +114,21 @@ class Critic_TransformerEncoder(nn.Module):
 
         T, N, _ = rewards.shape
         context = self.get_hidden_states(obs, prev_actions, rewards)
-        assert context.shape == (T * 3, N, self.hidden_size)
+        # assert context.shape == (T * 3, N, self.hidden_size)
 
-        assert current_actions is not None
-        assert current_actions.shape == (T, N, prev_actions.shape[2]) or current_actions.shape == (T - 1, N, prev_actions.shape[2]), f"{current_actions.shape} != {(T, N, prev_actions.shape[2])} or {(T - 1, N, prev_actions.shape[2])}"
+        # assert current_actions is not None
+        # assert current_actions.shape == (T, N, prev_actions.shape[2]) or current_actions.shape == (T - 1, N, prev_actions.shape[2]), f"{current_actions.shape} != {(T, N, prev_actions.shape[2])} or {(T - 1, N, prev_actions.shape[2])}"
         curaT = current_actions.shape[0]
         current_actions_encs = self.action_embedder(current_actions.reshape(curaT * N, self.action_dim)).reshape(curaT, N, self.hidden_size)
 
         mask = torch.triu(ptu.ones(T * 3, T * 3), diagonal=1).float()
         mask = mask.masked_fill(mask == 1, float('-inf'))
         decoded = self.transformer(context, mask=mask)
-        assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        state_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
-        assert state_embeds.shape == (T, N, self.hidden_size), f"{state_embeds.shape} != {(T, N, self.hidden_size)}"
-        final_embeds = torch.cat([state_embeds[:curaT], current_actions_encs], dim=-1)
-        assert final_embeds.shape == (curaT, N, self.hidden_size * 2)
+        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
+        obs_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
+        # assert obs_embeds.shape == (T, N, self.hidden_size), f"{obs_embeds.shape} != {(T, N, self.hidden_size)}"
+        final_embeds = torch.cat([obs_embeds[:curaT], current_actions_encs], dim=-1)
+        # assert final_embeds.shape == (curaT, N, self.hidden_size * 2)
 
         # 4. q value
         q1 = self.qf1(final_embeds)

@@ -17,6 +17,11 @@ FILE_NAMES = {
     'metrics/success_rate_eval': ['eval_success.png', 'Eval Success Rate', (0, 1.05)],
     'metrics/return_eval_total': ['eval_return.png', 'Eval Return', None],
     'metrics/return_train_total': ['train_return.png', 'Train Return', None],
+    'rl_loss/qf1_loss': ['qf1_loss.png', 'Q Loss 1', None],
+    'rl_loss/qf2_loss': ['qf2_loss.png', 'Q Loss 2', None],
+    'rl_loss/policy_loss': ['policy_loss.png', 'Policy Loss', None],
+    'rl_loss/policy_entropy': ['policy_entropy.png', 'Policy Entropy', None],
+    'rl_loss/alpha': ['alpha.png', 'Alpha', None],
 }
 ENV_STEPS_COL = "z/env_steps"
 
@@ -40,10 +45,17 @@ def compile_data(csv: str, column):
     df = df[[ENV_STEPS_COL, column]].copy()
     df[ENV_STEPS_COL] = pd.to_numeric(df[ENV_STEPS_COL], errors="coerce")
     df[column] = pd.to_numeric(df[column], errors="coerce")
-    df = df.dropna(subset=[ENV_STEPS_COL, column]).sort_values(ENV_STEPS_COL)
 
-    if df.empty:
-        raise ValueError("No valid rows after cleaning; nothing to plot.")
+    if df.dropna(subset=[ENV_STEPS_COL, column]).sort_values(ENV_STEPS_COL).empty:
+        # If no valid ENV_STEPS_COL data, plot indices vs. column values
+        df_col_only = df[[column]].copy()
+        df_col_only = df_col_only.dropna(subset=[column])
+        if df_col_only.empty:
+            raise ValueError("No valid rows after cleaning; nothing to plot.")
+        indices = np.arange(len(df_col_only))
+        return indices, df_col_only[column].to_numpy()
+
+    df = df.dropna(subset=[ENV_STEPS_COL, column]).sort_values(ENV_STEPS_COL)
 
     if df[ENV_STEPS_COL].to_numpy().shape[0] > 40:
         indices = np.linspace(0, df[ENV_STEPS_COL].to_numpy().shape[0], 40, endpoint=False).round().astype(np.int32)

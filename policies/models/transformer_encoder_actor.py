@@ -8,6 +8,28 @@ from utils import logger
 from policies.models.transformer_related import positional_embeddings
 
 
+def collectivize_inputs(prev_actions, rewards, obs):
+    if isinstance(rewards, list):
+        assert len(prev_actions) == len(rewards) == len(obs)
+        N = len(rewards)
+        Ts = [traj.shape[0] for traj in rewards]
+        T = max(Ts)
+        rewards_tensor = ptu.zeros(T, N, rewards[0].shape[-1], dtype=rewards[0].dtype)
+        obs_tensor = ptu.zeros(T, N, obs[0].shape[-1], dtype=obs[0].dtype)
+        prev_actions_tensor = ptu.zeros(T, N, prev_actions[0].shape[-1], dtype=prev_actions[0].dtype)
+        for i in range(N):
+            rewards_tensor[:rewards[i].shape[0],i,:] = rewards[i]
+            obs_tensor[:obs[i].shape[0],i,:] = obs[i]
+            prev_actions_tensor[:prev_actions[i].shape[0],i,:] = prev_actions[i]
+    else:
+        rewards_tensor = rewards
+        prev_actions_tensor = prev_actions
+        obs_tensor = obs
+        Ts = [rewards.shape[0]] * rewards.shape[1]
+    
+    return prev_actions_tensor, rewards_tensor, obs_tensor, ptu.tensor(Ts)
+
+
 class Actor_TransformerEncoder(nn.Module):
     def __init__(
         self,
@@ -88,9 +110,9 @@ class Actor_TransformerEncoder(nn.Module):
 
     def get_hidden_states(self, obs, prev_actions, rewards) -> torch.Tensor:
         T, N, _ = rewards.shape
-        assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
-        assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
-        assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
+        # assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
+        # assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
+        # assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
         obs_encs = self._get_obs_embedding(obs.reshape(T * N, self.obs_dim)).reshape(T, N, self.hidden_size)
         action_encs = self.action_embedder(prev_actions.reshape(T * N, self.action_dim)).reshape(T, N, self.hidden_size)
         reward_encs = self.reward_embedder(rewards.reshape(T * N, 1)).reshape(T, N, self.hidden_size)
@@ -115,17 +137,17 @@ class Actor_TransformerEncoder(nn.Module):
         
         T, N, _ = rewards.shape
         context = self.get_hidden_states(obs, prev_actions, rewards)
-        assert context.shape == (T * 3, N, self.hidden_size)
+        # assert context.shape == (T * 3, N, self.hidden_size)
 
         mask = torch.triu(ptu.ones(T * 3, T * 3), diagonal=1).float()
         mask = mask.masked_fill(mask == 1, float('-inf'))
         decoded = self.transformer(context, mask=mask)
-        assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        action_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
-        assert action_embeds.shape == (T, N, self.hidden_size)
-        actions, log_probs = self.algo.forward_actor(actor=self.policy, observ=action_embeds)
-        assert actions.shape == (T, N, prev_actions.shape[2])
-        assert log_probs.shape == (T, N, 1)
+        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
+        obs_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
+        # assert obs_embeds.shape == (T, N, self.hidden_size)
+        actions, log_probs = self.algo.forward_actor(actor=self.policy, observ=obs_embeds)
+        # assert actions.shape == (T, N, prev_actions.shape[2])
+        # assert log_probs.shape == (T, N, 1)
         return actions, log_probs
         # final_embed = decoded[T * 3 - 1, :, :]
         # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
@@ -145,22 +167,24 @@ class Actor_TransformerEncoder(nn.Module):
     @torch.no_grad()
     def act(
         self,
-        prev_actions: torch.Tensor,
-        rewards: torch.Tensor,
-        obs: torch.Tensor,
+        prev_actions,
+        rewards,
+        obs,
         deterministic=False,
         return_log_prob=False,
     ):
+        prev_actions, rewards, obs, Ts = collectivize_inputs(prev_actions, rewards, obs)
+        
         T, N, _ = rewards.shape
         context = self.get_hidden_states(obs, prev_actions, rewards)
-        assert context.shape == (T * 3, N, self.hidden_size)
+        # assert context.shape == (T * 3, N, self.hidden_size)
 
         mask = torch.triu(ptu.ones(T * 3, T * 3), diagonal=1).float()
         mask = mask.masked_fill(mask == 1, float('-inf'))
         decoded = self.transformer(context, mask=mask)
-        assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        final_embed = decoded[T * 3 - 1, :, :]
-        assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
+        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
+        final_embed = decoded[Ts * 3 - 1, torch.arange(N), :]
+        # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
 
         # 4. Actor head, generate action tuple
         action_tuple = self.algo.select_action(
