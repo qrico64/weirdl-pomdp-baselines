@@ -1,17 +1,16 @@
-seed: 41
+seed: 40
 cuda: 0 # use_gpu
 env:
   env_type: meta
   env_name: AntDir-v0
   max_rollouts_per_task: 2 # k=2, H=200, H^+ =400
 
-  num_tasks: 24
-  num_train_tasks: 4
+  num_tasks: 36
+  num_train_tasks: 16
   num_eval_tasks: 20
-  task_mode: circle_down_up
+  task_mode: circle
   reward_conditioning: no
-  goal_conditioning: fixed_noise
-  goal_noise_magnitude: 0.1
+  goal_conditioning: yes
   normalize_kwarg: true
   num_parallel_workers: 16
 
@@ -37,21 +36,21 @@ train:
 
 eval:
   eval_stochastic: false # also eval stochastic policy
-  log_interval: 16 # num of iters
+  log_interval: 8 # num of iters
   save_interval: 512
   log_tensorboard: true
 
 policy:
-  seq_model: gru # [lstm, gru]
+  seq_model: transformer # [lstm, gru]
   algo_name: sac # [td3, sac]
 
-  action_embedding_size: 16
+  action_embedding_size: 32
   observ_embedding_size: 32
-  reward_embedding_size: 16
+  reward_embedding_size: 32
   rnn_hidden_size: 128
 
-  dqn_layers: [128, 128, 128]
-  policy_layers: [128, 128, 128]
+  dqn_layers: [128]
+  policy_layers: [128]
   lr: 0.0003
   gamma: 0.99
   tau: 0.005

@@ -1,6 +1,8 @@
 # -*- coding: future_fstrings -*-
 import os, sys
 import time
+import threading
+from queue import Queue
 
 import math
 import numpy as np
@@ -36,7 +38,7 @@ class Learner:
 
         self.init_env(**env_args)
 
-        self.init_agent(**policy_args)
+        self.init_agent(**policy_args, max_len=self.max_trajectory_len)
 
         self.init_train(**train_args)
 
@@ -247,6 +249,7 @@ class Learner:
         separate: bool = True,
         image_encoder=None,
         reward_clip=False,
+        max_len=None,
         **kwargs
     ):
         # initialize agent
@@ -254,6 +257,9 @@ class Learner:
             agent_class = AGENT_CLASSES["Policy_MLP"]
             rnn_encoder_type = None
             assert separate == True
+        elif seq_model == "transformer":
+            agent_class = AGENT_CLASSES["Transformer"]
+            rnn_encoder_type = None
         elif "-mlp" in seq_model:
             agent_class = AGENT_CLASSES["Policy_RNN_MLP"]
             rnn_encoder_type = seq_model.split("-")[0]
@@ -280,6 +286,7 @@ class Learner:
             obs_dim=self.obs_dim,
             action_dim=self.act_dim,
             image_encoder_fn=image_encoder_fn,
+            max_len=max_len,
             **kwargs,
         ).to(ptu.device)
         logger.log(self.agent)
@@ -403,21 +410,24 @@ class Learner:
 
         self._start_training()
 
+        # Perform initial evaluation before training for debugging
+        logger.log("Performing initial evaluation before training...")
+        initial_perf = self.log()
+        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
-            while (
-                self._n_env_steps_total
-                < self.num_init_rollouts_pool * self.max_trajectory_len
-            ):
-                # Use parallel collection if available
-                if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
-                    self.collect_rollouts_parallel(
-                        num_rollouts=min(self.num_parallel_workers,
-                                        (self.num_init_rollouts_pool * self.max_trajectory_len - self._n_env_steps_total) // self.max_trajectory_len + 1),
-                        random_actions=True,
-                        parallel_env=self.train_env_parallel,
-                    )
-                else:
+            if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
+                self.collect_rollouts_parallel(
+                    num_rollouts=self.num_init_rollouts_pool,
+                    random_actions=True,
+                    parallel_env=self.train_env_parallel,
+                )
+            else:
+                while (
+                    self._n_env_steps_total
+                    < self.num_init_rollouts_pool * self.max_trajectory_len
+                ):
                     self.collect_rollouts(
                         num_rollouts=1,
                         random_actions=True,
@@ -491,7 +501,7 @@ class Learner:
             obs = obs.reshape(1, obs.shape[-1])
             done_rollout = False
 
-            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
                 # temporary storage
                 obs_list, act_list, rew_list, next_obs_list, term_list = (
                     [],
@@ -584,7 +594,7 @@ class Learner:
                 # set: obs <- next_obs
                 obs = next_obs.clone()
 
-            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
                 # add collected sequence to buffer
                 act_buffer = torch.cat(act_list, dim=0)  # (L, dim)
                 if not self.act_continuous:
@@ -676,7 +686,7 @@ class Learner:
             worker_states[worker_id]['active'] = True
             worker_states[worker_id]['steps'] = 0
 
-            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
                 worker_states[worker_id]['obs_list'] = []
                 worker_states[worker_id]['act_list'] = []
                 worker_states[worker_id]['rew_list'] = []
@@ -705,6 +715,11 @@ class Learner:
                 worker_states[worker_id]['next_obs_list'] += nominal_trajectory['next_observations']
                 worker_states[worker_id]['term_list'] += [False for _ in range(len(nominal_trajectory['observations']))]
                 worker_states[worker_id]['nominal_length'] = len(nominal_trajectory['observations'])
+            
+            if self.agent_arch == AGENT_ARCHS.Transformer:
+                action, reward = self.agent.get_initial_info()
+                worker_states[worker_id]['action'] = action
+                worker_states[worker_id]['reward'] = reward
 
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
@@ -767,6 +782,13 @@ class Learner:
                         else:
                             # GRU: extract hidden for this worker
                             worker_states[worker_id]['internal_state'] = batch_new_internal_states[:, idx:idx+1, :]
+                elif self.agent_arch == AGENT_ARCHS.Transformer:
+                    batch_obs = torch.cat([torch.stack(worker_states[wid]['obs_list'] + [worker_states[wid]['obs']], dim=0) for wid in active_workers], dim=1)
+                    batch_prev_actions = torch.cat([torch.stack(worker_states[wid]['act_list'] + [worker_states[wid]['action']], dim=0) for wid in active_workers], dim=1)
+                    batch_rewards = torch.cat([torch.stack(worker_states[wid]['rew_list'] + [worker_states[wid]['reward']], dim=0) for wid in active_workers], dim=1)
+                    batch_actions, _, _, _ = self.agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=False)
+                    for idx, worker_id in enumerate(active_workers):
+                        worker_actions[worker_id] = batch_actions[idx:idx+1]
                 else:
                     # For Markov agents, simply batch observations
                     batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
@@ -803,8 +825,6 @@ class Learner:
                 worker_transitions[worker_id] = (next_obs, reward, done, info, worker_actions[worker_id])
 
             # PHASE 4: Process transitions (add to buffer, check for episode completion)
-            workers_to_reset = []  # Track which workers need reset
-
             for worker_id, (next_obs, reward, done, info, action) in worker_transitions.items():
                 state = worker_states[worker_id]
                 obs = state['obs']
@@ -861,7 +881,7 @@ class Learner:
                 # Handle episode completion
                 if done_rollout:
                     # For memory-based agents, add complete episode to buffer
-                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
                         act_buffer = torch.cat(state['act_list'], dim=0)
                         if not self.act_continuous:
                             act_buffer = torch.argmax(act_buffer, dim=-1, keepdims=True)
@@ -881,6 +901,8 @@ class Learner:
                             f" step: {len(state['obs_list'])}"
                             + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
                         )
+                        # if state['steps'] >= 327:
+                        #     breakpoint()
 
                     # Update statistics
                     self._n_env_steps_total += state['steps']
@@ -888,16 +910,12 @@ class Learner:
 
                     # Decrement remaining rollouts
                     state['remaining_rollouts'] -= 1
-
-                    if state['remaining_rollouts'] > 0:
-                        # Need to reset this worker for another rollout
-                        workers_to_reset.append(worker_id)
-                    else:
-                        # This worker is completely done
-                        state['active'] = False
+                    state['active'] = False
 
             # PHASE 5: Reset workers that finished episodes (in parallel)
-            if workers_to_reset:
+            if all(not worker_states[wid]['active'] for wid in worker_states.keys()):
+                workers_to_reset = [wid for wid in worker_states.keys() if worker_states[wid]['remaining_rollouts'] > 0]
+                print(f"Resetting workers {workers_to_reset}...")
                 # Send reset commands to all workers that need it (non-blocking)
                 for worker_id in workers_to_reset:
                     if self.env_type == "meta" and parallel_env.n_tasks is not None:
@@ -914,10 +932,11 @@ class Learner:
                     state = worker_states[worker_id]
                     obs = ptu.from_numpy(obs_np).reshape(1, obs_np.shape[-1])
                     state['obs'] = obs
+                    state['active'] = True
                     state['steps'] = 0
 
                     # Reset storage for memory-based agents
-                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
                         state['obs_list'] = []
                         state['act_list'] = []
                         state['rew_list'] = []
@@ -929,7 +948,13 @@ class Learner:
                         state['action'] = action
                         state['reward'] = reward
                         state['internal_state'] = internal_state
+            
+                    if self.agent_arch == AGENT_ARCHS.Transformer:
+                        action, reward = self.agent.get_initial_info()
+                        worker_states[worker_id]['action'] = action
+                        worker_states[worker_id]['reward'] = reward
 
+        print(f"Ending collection...")
         return self._n_env_steps_total - before_env_steps
 
     def sample_rl_batch(self, batch_size):
@@ -985,6 +1010,10 @@ class Learner:
 
             step = 0
 
+            obss = []
+            actions = []
+            rewards = []
+
             if self.env_type == "meta" and self.eval_env.n_tasks is not None:
                 obs = ptu.from_numpy(self.eval_env.reset(task=task))  # reset task
                 observations[task_idx, step, :] = ptu.get_numpy(obs[:obs_size])
@@ -996,6 +1025,11 @@ class Learner:
             if self.agent_arch == AGENT_ARCHS.Memory:
                 # assume initial reward = 0.0
                 action, reward, internal_state = self.agent.get_initial_info()
+            elif self.agent_arch == AGENT_ARCHS.Transformer:
+                action, reward = self.agent.get_initial_info()
+                obss.append(obs)
+                actions.append(action)
+                rewards.append(reward)
             
             if self.use_nominals:
                 nominal_trajectory: dict = self.nominal_trajectories[task]
@@ -1023,6 +1057,13 @@ class Learner:
                             obs=obs,
                             deterministic=deterministic,
                         )
+                    elif self.agent_arch == AGENT_ARCHS.Transformer:
+                        batch_obs = torch.stack(obss, dim=0)
+                        batch_prev_actions = torch.stack(actions, dim=0)
+                        batch_rewards = torch.stack(rewards, dim=0)
+                        batch_actions, _, _, _ = self.agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=deterministic)
+                        action = batch_actions
+                        assert batch_actions.shape[0] == 1
                     else:
                         action, _, _, _ = self.agent.act(
                             obs, deterministic=deterministic
@@ -1032,14 +1073,19 @@ class Learner:
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )
-                    if "render_pos" in dir(self.eval_env.unwrapped):
-                        running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
 
-                    # add raw reward
-                    running_reward += reward.item()
                     # clip reward if necessary for policy inputs
                     if self.reward_clip and self.env_type == "atari":
                         reward = torch.tanh(reward)
+
+                    if "render_pos" in dir(self.eval_env.unwrapped):
+                        running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
+                    # add raw reward
+                    running_reward += reward.item()
+                    if self.agent_arch == AGENT_ARCHS.Transformer:
+                        obss.append(next_obs)
+                        actions.append(action)
+                        rewards.append(reward)
 
                     step += 1
                     done_rollout = False if ptu.get_numpy(done[0][0]) == 0.0 else True
@@ -1089,7 +1135,7 @@ class Learner:
         for k, v in train_stats.items():
             logger.record_tabular("rl_loss/" + k, v)
         ## gradient norms
-        if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov]:
+        if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
             results = self.agent.report_grad_norm()
             for k, v in results.items():
                 logger.record_tabular("rl_loss/" + k, v)

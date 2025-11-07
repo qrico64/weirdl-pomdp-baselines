@@ -17,15 +17,19 @@ from policies.rl import RL_ALGORITHMS
 import torchkit.pytorch_utils as ptu
 from policies.models.recurrent_critic import Critic_RNN
 from policies.models.recurrent_actor import Actor_RNN
+from policies.models.transformer_actor import Actor_Transformer
+from policies.models.transformer_critic import Critic_Transformer
+from policies.models.transformer_encoder_critic import Critic_TransformerEncoder
+from policies.models.transformer_encoder_actor import Actor_TransformerEncoder
 from utils import logger
 
 
-class ModelFreeOffPolicy_Separate_RNN(nn.Module):
+class ModelFreeOffPolicy_Transformer(nn.Module):
     """Recommended Architecture
     Recurrent Actor and Recurrent Critic with separate RNNs
     """
 
-    ARCH = "memory"
+    ARCH = "transformer"
     Markov_Actor = False
     Markov_Critic = False
 
@@ -47,6 +51,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
         tau=5e-3,
         # pixel obs
         image_encoder_fn=lambda: None,
+        max_len=None,
         **kwargs
     ):
         super().__init__()
@@ -59,7 +64,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
         self.algo = RL_ALGORITHMS[algo_name](**kwargs[algo_name], action_dim=action_dim)
 
         # Critics
-        self.critic = Critic_RNN(
+        self.critic = Critic_TransformerEncoder(
             obs_dim,
             action_dim,
             encoder,
@@ -70,6 +75,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
             rnn_hidden_size,
             dqn_layers,
             rnn_num_layers,
+            max_len=max_len,
             image_encoder=image_encoder_fn(),  # separate weight
         )
         self.critic_optimizer = Adam(self.critic.parameters(), lr=lr)
@@ -77,7 +83,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
         self.critic_target = deepcopy(self.critic)
 
         # Actor
-        self.actor = Actor_RNN(
+        self.actor = Actor_TransformerEncoder(
             obs_dim,
             action_dim,
             encoder,
@@ -88,6 +94,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
             rnn_hidden_size,
             policy_layers,
             rnn_num_layers,
+            max_len=max_len,
             image_encoder=image_encoder_fn(),  # separate weight
         )
         self.actor_optimizer = Adam(self.actor.parameters(), lr=lr)
@@ -101,27 +108,21 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
     @torch.no_grad()
     def act(
         self,
-        prev_internal_state,
-        prev_action,
-        reward,
+        prev_actions,
+        rewards,
         obs,
         deterministic=False,
         return_log_prob=False,
     ):
-        prev_action = prev_action.unsqueeze(0)  # (1, B, dim)
-        reward = reward.unsqueeze(0)  # (1, B, 1)
-        obs = obs.unsqueeze(0)  # (1, B, dim)
-
-        current_action_tuple, current_internal_state = self.actor.act(
-            prev_internal_state=prev_internal_state,
-            prev_action=prev_action,
-            reward=reward,
+        current_action_tuple = self.actor.act(
+            prev_actions=prev_actions,
+            rewards=rewards,
             obs=obs,
             deterministic=deterministic,
             return_log_prob=return_log_prob,
         )
 
-        return current_action_tuple, current_internal_state
+        return current_action_tuple
 
     def forward(self, actions, rewards, observs, dones, masks):
         """
@@ -154,6 +155,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
         (q1_pred, q2_pred), q_target = self.algo.critic_loss(
             markov_actor=self.Markov_Actor,
             markov_critic=self.Markov_Critic,
+            transformer=True,
             actor=self.actor,
             actor_target=self.actor_target,
             critic=self.critic,
@@ -163,7 +165,6 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
             rewards=rewards,
             dones=dones,
             gamma=self.gamma,
-            transformer=False,
         )
 
         # masked Bellman error: masks (T,B,1) ignore the invalid error
@@ -227,9 +228,9 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
         # may add qf1, policy, etc.
         return {
             "q_grad_norm": utl.get_grad_norm(self.critic),
-            "q_rnn_grad_norm": utl.get_grad_norm(self.critic.rnn),
+            "q_rnn_grad_norm": utl.get_grad_norm(self.critic.transformer),
             "pi_grad_norm": utl.get_grad_norm(self.actor),
-            "pi_rnn_grad_norm": utl.get_grad_norm(self.actor.rnn),
+            "pi_rnn_grad_norm": utl.get_grad_norm(self.actor.transformer),
         }
 
     def update(self, batch):

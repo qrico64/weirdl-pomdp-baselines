@@ -81,6 +81,7 @@ class SAC(RLAlgorithmBase):
         self,
         markov_actor: bool,
         markov_critic: bool,
+        transformer: bool,
         actor,
         actor_target,
         critic,
@@ -92,10 +93,18 @@ class SAC(RLAlgorithmBase):
         gamma,
         next_observs=None,  # used in markov_critic
     ):
+        T1, B, _ = rewards.shape
         # Q^tar(h(t+1), pi(h(t+1))) + H[pi(h(t+1))]
         with torch.no_grad():
             # first next_actions from current policy,
-            if markov_actor:
+            if transformer:
+                new_actions, new_log_probs = actor(
+                    prev_actions=actions,
+                    rewards=rewards,
+                    observs=observs,
+                )
+                assert new_actions.shape == actions.shape
+            elif markov_actor:
                 new_actions, new_log_probs = self.forward_actor(
                     actor, next_observs if markov_critic else observs
                 )
