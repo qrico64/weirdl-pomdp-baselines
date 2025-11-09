@@ -17,8 +17,6 @@ from policies.rl import RL_ALGORITHMS
 import torchkit.pytorch_utils as ptu
 from policies.models.recurrent_critic import Critic_RNN
 from policies.models.recurrent_actor import Actor_RNN
-from policies.models.transformer_actor import Actor_Transformer
-from policies.models.transformer_critic import Critic_Transformer
 from policies.models.transformer_encoder_critic import Critic_TransformerEncoder
 from policies.models.transformer_encoder_actor import Actor_TransformerEncoder
 from utils import logger

@@ -774,8 +774,10 @@ class Learner:
             
             if self.agent_arch == AGENT_ARCHS.Transformer:
                 action, reward = self.rollout_agent.get_initial_info()
-                worker_states[worker_id]['action'] = action
-                worker_states[worker_id]['reward'] = reward
+                worker_states[worker_id]['obs_list'].append(obs)
+                worker_states[worker_id]['act_list'].append(action)
+                worker_states[worker_id]['rew_list'].append(reward)
+                worker_states[worker_id]['next_obs_list'] = None
 
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
@@ -839,9 +841,9 @@ class Learner:
                             # GRU: extract hidden for this worker
                             worker_states[worker_id]['internal_state'] = batch_new_internal_states[:, idx:idx+1, :]
                 elif self.agent_arch == AGENT_ARCHS.Transformer:
-                    batch_obs = [torch.cat(worker_states[wid]['obs_list'] + [worker_states[wid]['obs']], dim=0) for wid in active_workers]
-                    batch_prev_actions = [torch.cat(worker_states[wid]['act_list'] + [worker_states[wid]['action']], dim=0) for wid in active_workers]
-                    batch_rewards = [torch.cat(worker_states[wid]['rew_list'] + [worker_states[wid]['reward']], dim=0) for wid in active_workers]
+                    batch_obs = [torch.cat(worker_states[wid]['obs_list'], dim=0) for wid in active_workers]
+                    batch_prev_actions = [torch.cat(worker_states[wid]['act_list'], dim=0) for wid in active_workers]
+                    batch_rewards = [torch.cat(worker_states[wid]['rew_list'], dim=0) for wid in active_workers]
                     batch_actions, _, _, _ = self.rollout_agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=False)
                     for idx, worker_id in enumerate(active_workers):
                         worker_actions[worker_id] = batch_actions[idx:idx+1]
@@ -921,6 +923,12 @@ class Learner:
                         terminal=np.array([term], dtype=float),
                         next_observation=ptu.get_numpy(next_obs.squeeze(dim=0)),
                     )
+                elif self.agent_arch == AGENT_ARCHS.Transformer:
+                    state['obs_list'].append(next_obs)
+                    state['act_list'].append(action)
+                    state['rew_list'].append(reward)
+                    state['term_list'].append(term)
+                    state['next_obs_list'] = None
                 else:  # Memory-based agent
                     state['obs_list'].append(obs)
                     state['act_list'].append(action)
@@ -943,14 +951,24 @@ class Learner:
                             act_buffer = torch.argmax(act_buffer, dim=-1, keepdims=True)
 
                         nominals = None if state['nominal_length'] is None else np.arange(len(state['obs_list'])) < state['nominal_length']
-                        self.policy_storage.add_episode(
-                            observations=ptu.get_numpy(torch.cat(state['obs_list'], dim=0)),
-                            actions=ptu.get_numpy(act_buffer),
-                            rewards=ptu.get_numpy(torch.cat(state['rew_list'], dim=0)),
-                            terminals=np.array(state['term_list']).reshape(-1, 1),
-                            next_observations=ptu.get_numpy(torch.cat(state['next_obs_list'], dim=0)),
-                            nominals=nominals,
-                        )
+                        if self.agent_arch == AGENT_ARCHS.Transformer:
+                            self.policy_storage.add_episode(
+                                observations=ptu.get_numpy(torch.cat(state['obs_list'][:-1], dim=0)),
+                                actions=ptu.get_numpy(act_buffer[1:]),
+                                rewards=ptu.get_numpy(torch.cat(state['rew_list'][1:], dim=0)),
+                                terminals=np.array(state['term_list']).reshape(-1, 1),
+                                next_observations=ptu.get_numpy(torch.cat(state['obs_list'][1:], dim=0)),
+                                nominals=nominals,
+                            )
+                        else:
+                            self.policy_storage.add_episode(
+                                observations=ptu.get_numpy(torch.cat(state['obs_list'], dim=0)),
+                                actions=ptu.get_numpy(act_buffer),
+                                rewards=ptu.get_numpy(torch.cat(state['rew_list'], dim=0)),
+                                terminals=np.array(state['term_list']).reshape(-1, 1),
+                                next_observations=ptu.get_numpy(torch.cat(state['next_obs_list'], dim=0)),
+                                nominals=nominals,
+                            )
                         print(
                             f"worker_{worker_id} steps: {state['steps']} term: {term} "
                             f"ret: {torch.cat(state['rew_list'], dim=0).sum().item():.2f}"
@@ -1006,8 +1024,10 @@ class Learner:
 
                     if self.agent_arch == AGENT_ARCHS.Transformer:
                         action, reward = self.rollout_agent.get_initial_info()
-                        worker_states[worker_id]['action'] = action
-                        worker_states[worker_id]['reward'] = reward
+                        state['obs_list'].append(obs)
+                        state['act_list'].append(action)
+                        state['rew_list'].append(reward)
+                        state['next_obs_list'] = None
 
         print(f"Ending collection...")
         return self._n_env_steps_total - before_env_steps
