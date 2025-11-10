@@ -11,6 +11,7 @@ env:
   task_mode: circle
   reward_conditioning: no
   goal_conditioning: yes
+  infinite_tasks: yes
   normalize_kwarg: true
   num_parallel_workers: 16
 
@@ -44,13 +45,14 @@ policy:
   seq_model: transformer # [lstm, gru]
   algo_name: sac # [td3, sac]
 
-  action_embedding_size: 32
-  observ_embedding_size: 32
-  reward_embedding_size: 32
+  action_embedding_size: 48
+  observ_embedding_size: 48
+  reward_embedding_size: 48
   rnn_hidden_size: 128
+  rnn_num_layers: 4
 
-  dqn_layers: [128]
-  policy_layers: [128]
+  dqn_layers: [128, 128]
+  policy_layers: [128, 128]
   lr: 0.0003
   gamma: 0.99
   tau: 0.005
