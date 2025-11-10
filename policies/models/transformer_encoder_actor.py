@@ -9,23 +9,20 @@ from policies.models.transformer_related import positional_embeddings
 
 
 def collectivize_inputs(prev_actions, rewards, obs):
-    if isinstance(rewards, list):
-        assert len(prev_actions) == len(rewards) == len(obs)
-        N = len(rewards)
-        Ts = [traj.shape[0] for traj in rewards]
-        T = max(Ts)
-        rewards_tensor = ptu.zeros(T, N, rewards[0].shape[-1], dtype=rewards[0].dtype)
-        obs_tensor = ptu.zeros(T, N, obs[0].shape[-1], dtype=obs[0].dtype)
-        prev_actions_tensor = ptu.zeros(T, N, prev_actions[0].shape[-1], dtype=prev_actions[0].dtype)
-        for i in range(N):
-            rewards_tensor[:rewards[i].shape[0],i,:] = rewards[i]
-            obs_tensor[:obs[i].shape[0],i,:] = obs[i]
-            prev_actions_tensor[:prev_actions[i].shape[0],i,:] = prev_actions[i]
-    else:
-        rewards_tensor = rewards
-        prev_actions_tensor = prev_actions
-        obs_tensor = obs
-        Ts = [rewards.shape[0]] * rewards.shape[1]
+    assert isinstance(rewards, list)
+    assert isinstance(prev_actions, list)
+    assert isinstance(obs, list)
+    assert len(prev_actions) == len(rewards) == len(obs)
+    N = len(rewards)
+    Ts = [traj.shape[0] for traj in rewards]
+    T = max(Ts)
+    rewards_tensor = ptu.zeros(T, N, rewards[0].shape[-1], dtype=rewards[0].dtype)
+    obs_tensor = ptu.zeros(T, N, obs[0].shape[-1], dtype=obs[0].dtype)
+    prev_actions_tensor = ptu.zeros(T, N, prev_actions[0].shape[-1], dtype=prev_actions[0].dtype)
+    for i in range(N):
+        rewards_tensor[:rewards[i].shape[0],i,:] = rewards[i]
+        obs_tensor[:obs[i].shape[0],i,:] = obs[i]
+        prev_actions_tensor[:prev_actions[i].shape[0],i,:] = prev_actions[i]
     
     return prev_actions_tensor, rewards_tensor, obs_tensor, ptu.tensor(Ts)
 
@@ -81,7 +78,13 @@ class Actor_TransformerEncoder(nn.Module):
         self.num_layers = rnn_num_layers
 
         self.hidden_size = self.observ_embedding_size
-        logger.log(f"Creating actor transformer with {self.hidden_size} embedding size.")
+        logger.log(f"\n****** Creating actor transformer ******")
+        logger.log(f"d_model = {self.hidden_size}")
+        logger.log(f"nhead = {4}")
+        logger.log(f"dim_feedforward = {self.hidden_size * 4}")
+        logger.log(f"dropout = {0.1}")
+        logger.log(f"activation = {'relu'}")
+        logger.log(f"num_layers = {self.num_layers}")
         decoder_layer = nn.TransformerEncoderLayer(
             d_model=self.hidden_size,
             nhead=4,
@@ -91,9 +94,9 @@ class Actor_TransformerEncoder(nn.Module):
         )
         norm = nn.LayerNorm(self.hidden_size)
         self.transformer = nn.TransformerEncoder(decoder_layer, num_layers=self.num_layers, norm=norm)
+        logger.log(f"****** Created actor transformer ******\n")
 
         ## 4. build policy
-        assert len(policy_layers) == 1
         self.policy = self.algo.build_actor(
             input_size=self.hidden_size,
             action_dim=self.action_dim,

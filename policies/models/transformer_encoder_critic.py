@@ -58,7 +58,13 @@ class Critic_TransformerEncoder(nn.Module):
         self.num_layers = rnn_num_layers
 
         self.hidden_size = self.observ_embedding_size
-        logger.log(f"Creating critic transformer with {self.hidden_size} embedding size.")
+        logger.log(f"\n****** Creating actor transformer ******")
+        logger.log(f"d_model = {self.hidden_size}")
+        logger.log(f"nhead = {4}")
+        logger.log(f"dim_feedforward = {self.hidden_size * 4}")
+        logger.log(f"dropout = {0.1}")
+        logger.log(f"activation = {'relu'}")
+        logger.log(f"num_layers = {self.num_layers}")
         decoder_layer = nn.TransformerEncoderLayer(
             d_model=self.hidden_size,
             nhead=4,
@@ -68,9 +74,9 @@ class Critic_TransformerEncoder(nn.Module):
         )
         norm = nn.LayerNorm(self.hidden_size)
         self.transformer = nn.TransformerEncoder(decoder_layer, num_layers=self.num_layers, norm=norm)
+        logger.log(f"****** Created actor transformer ******\n")
 
         ## 4. build q networks
-        assert len(dqn_layers) == 1
         self.qf1, self.qf2 = self.algo.build_critic(
             input_size=self.hidden_size*2,
             hidden_sizes=dqn_layers,

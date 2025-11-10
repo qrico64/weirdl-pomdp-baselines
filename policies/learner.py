@@ -779,6 +779,7 @@ class Learner:
                 worker_states[worker_id]['rew_list'].append(reward)
                 worker_states[worker_id]['next_obs_list'] = None
 
+        goals = set()
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
 
@@ -874,6 +875,7 @@ class Learner:
             for worker_id in worker_actions.keys():
                 msg_type, (next_obs_np, reward_np, done_np, info) = parallel_env.remotes[worker_id].recv()
                 assert msg_type == 'transition'
+                goals.add(next_obs_np[-2])
 
                 # Convert to torch tensors (matching utl.env_step format)
                 next_obs = ptu.from_numpy(next_obs_np).view(-1, next_obs_np.shape[0])
@@ -1030,6 +1032,7 @@ class Learner:
                         state['next_obs_list'] = None
 
         print(f"Ending collection...")
+        logger.log(f"Traversed goals: {goals}")
         return self._n_env_steps_total - before_env_steps
 
     def sample_rl_batch(self, batch_size):
@@ -1072,6 +1075,8 @@ class Learner:
         returns_per_episode = np.zeros((len(tasks), num_episodes))
         success_rate = np.zeros(len(tasks))
         total_steps = np.zeros(len(tasks))
+
+        goals = set()
 
         if self.env_type == "meta":
             num_steps_per_episode = self.eval_env.unwrapped._max_episode_steps  # H
@@ -1135,9 +1140,9 @@ class Learner:
                             deterministic=deterministic,
                         )
                     elif self.agent_arch == AGENT_ARCHS.Transformer:
-                        batch_obs = torch.stack(obss, dim=0)
-                        batch_prev_actions = torch.stack(actions, dim=0)
-                        batch_rewards = torch.stack(rewards, dim=0)
+                        batch_obs = [torch.cat(obss, dim=0)]
+                        batch_prev_actions = [torch.cat(actions, dim=0)]
+                        batch_rewards = [torch.cat(rewards, dim=0)]
                         batch_actions, _, _, _ = self.agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=deterministic)
                         action = batch_actions
                         assert batch_actions.shape[0] == 1
@@ -1150,13 +1155,14 @@ class Learner:
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )
+                    goals.add(float(next_obs[0,-2].detach().cpu()))
 
                     # clip reward if necessary for policy inputs
                     if self.reward_clip and self.env_type == "atari":
                         reward = torch.tanh(reward)
 
                     if "render_pos" in dir(self.eval_env.unwrapped):
-                        running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
+                        running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())) + [reward.item()])
                     # add raw reward
                     running_reward += reward.item()
                     if self.agent_arch == AGENT_ARCHS.Transformer:
@@ -1202,6 +1208,8 @@ class Learner:
             total_steps[task_idx] = step
             to_log = f"""\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation() if 'annotation' in dir(self.eval_env.unwrapped) else ''}):\n{episodes_infos}\n{episodes_infos_rewards}\n"""
             logger.log(to_log)
+        
+        logger.log(f"Evaluated goals: {goals}")
         return returns_per_episode, success_rate, observations, total_steps
 
     def log_train_stats(self, train_stats):
