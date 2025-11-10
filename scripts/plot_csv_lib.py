@@ -139,7 +139,7 @@ def plot_comparison(out: str, parents: list, column, labels: list = None, title:
             # Count how many runs are available at each point
             n_runs_available = np.sum(~np.isnan(interpolated_ys), axis=0)
 
-            label = labels[idx] if labels is not None else f"Aggregated {idx}"
+            label = f"{labels[idx]} ({len(parent)} seeds)" if labels is not None else f"Aggregated {idx}"
             line = ax.plot(common_xs, mean_ys, linewidth=1.5, label=label)
 
             # Only show error region where we have more than 1 run
