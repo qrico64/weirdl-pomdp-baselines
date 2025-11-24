@@ -99,10 +99,7 @@ class Critic_TransformerEncoder(nn.Module):
         obs_encs = self._get_obs_embedding(obs.reshape(T * N, self.obs_dim)).reshape(T, N, self.hidden_size)
         action_encs = self.action_embedder(prev_actions.reshape(T * N, self.action_dim)).reshape(T, N, self.hidden_size)
         reward_encs = self.reward_embedder(rewards.reshape(T * N, 1)).reshape(T, N, self.hidden_size)
-        context = torch.zeros(T * 3, N, self.hidden_size, dtype=action_encs.dtype, device=action_encs.device)
-        context[torch.arange(T * 3) % 3 == 0, :, :] = action_encs
-        context[torch.arange(T * 3) % 3 == 1, :, :] = reward_encs
-        context[torch.arange(T * 3) % 3 == 2, :, :] = obs_encs
+        context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
         context += pos
 
