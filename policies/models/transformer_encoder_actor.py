@@ -6,13 +6,15 @@ from torchkit.constant import *
 import torchkit.pytorch_utils as ptu
 from utils import logger
 from policies.models.transformer_related import positional_embeddings
+import time
+import numpy as np
 
 
 def collectivize_inputs(prev_actions, rewards, obs):
-    assert isinstance(rewards, list)
-    assert isinstance(prev_actions, list)
-    assert isinstance(obs, list)
-    assert len(prev_actions) == len(rewards) == len(obs)
+    # assert isinstance(rewards, list)
+    # assert isinstance(prev_actions, list)
+    # assert isinstance(obs, list)
+    # assert len(prev_actions) == len(rewards) == len(obs)
     N = len(rewards)
     Ts = [traj.shape[0] for traj in rewards]
     T = max(Ts)
@@ -103,7 +105,11 @@ class Actor_TransformerEncoder(nn.Module):
             hidden_sizes=policy_layers,
         )
 
-        self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=max_len*3+4)
+        self.MAX_3T = max_len * 3 + 4
+        self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.MAX_3T)
+        self.mask = torch.triu(ptu.ones(self.MAX_3T, self.MAX_3T), diagonal=1).float()
+        self.mask = self.mask.masked_fill(self.mask == 1, float('-inf'))
+        self.register_buffer("my_mask", self.mask)
 
     def _get_obs_embedding(self, observs: torch.Tensor) -> torch.Tensor:
         if self.image_encoder is None:  # vector obs
@@ -139,8 +145,7 @@ class Actor_TransformerEncoder(nn.Module):
         context = self.get_hidden_states(obs, prev_actions, rewards)
         # assert context.shape == (T * 3, N, self.hidden_size)
 
-        mask = torch.triu(ptu.ones(T * 3, T * 3), diagonal=1).float()
-        mask = mask.masked_fill(mask == 1, float('-inf'))
+        mask = self.mask[:T * 3, :T * 3]
         decoded = self.transformer(context, mask=mask)
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
         obs_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
@@ -179,8 +184,7 @@ class Actor_TransformerEncoder(nn.Module):
         context = self.get_hidden_states(obs, prev_actions, rewards)
         # assert context.shape == (T * 3, N, self.hidden_size)
 
-        mask = torch.triu(ptu.ones(T * 3, T * 3), diagonal=1).float()
-        mask = mask.masked_fill(mask == 1, float('-inf'))
+        mask = self.mask[:T * 3, :T * 3]
         decoded = self.transformer(context, mask=mask)
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
         final_embed = decoded[Ts * 3 - 1, torch.arange(N), :]
