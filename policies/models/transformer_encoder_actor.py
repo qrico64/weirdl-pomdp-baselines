@@ -111,6 +111,8 @@ class Actor_TransformerEncoder(nn.Module):
         self.mask = self.mask.masked_fill(self.mask == 1, float('-inf'))
         self.register_buffer("my_mask", self.mask)
 
+        # self.stats = [[], [], []]
+
     def _get_obs_embedding(self, observs: torch.Tensor) -> torch.Tensor:
         if self.image_encoder is None:  # vector obs
             return self.observ_embedder(observs)
@@ -118,13 +120,13 @@ class Actor_TransformerEncoder(nn.Module):
             return self.image_encoder(observs)
 
     def get_hidden_states(self, obs, prev_actions, rewards) -> torch.Tensor:
-        T, N, _ = rewards.shape
+        # T, N, _ = rewards.shape
         # assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
         # assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
         # assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
-        obs_encs = self._get_obs_embedding(obs.reshape(T * N, self.obs_dim)).reshape(T, N, self.hidden_size)
-        action_encs = self.action_embedder(prev_actions.reshape(T * N, self.action_dim)).reshape(T, N, self.hidden_size)
-        reward_encs = self.reward_embedder(rewards.reshape(T * N, 1)).reshape(T, N, self.hidden_size)
+        obs_encs = self._get_obs_embedding(obs)
+        action_encs = self.action_embedder(prev_actions)
+        reward_encs = self.reward_embedder(rewards)
         context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
         context += pos
@@ -175,19 +177,26 @@ class Actor_TransformerEncoder(nn.Module):
         prev_actions,
         rewards,
         obs,
+        lengths,
         deterministic=False,
         return_log_prob=False,
     ):
-        prev_actions, rewards, obs, Ts = collectivize_inputs(prev_actions, rewards, obs)
-        
+        # assert lengths.dtype == torch.int64
+        # t0 = time.perf_counter_ns()
         T, N, _ = rewards.shape
+        # assert T == lengths.max(), f"{T} != {lengths.max()}"
+        
         context = self.get_hidden_states(obs, prev_actions, rewards)
+        # self.stats[0].append(time.perf_counter_ns() - t0)
+        # t0 = time.perf_counter_ns()
         # assert context.shape == (T * 3, N, self.hidden_size)
 
         mask = self.mask[:T * 3, :T * 3]
         decoded = self.transformer(context, mask=mask)
+        # self.stats[1].append(time.perf_counter_ns() - t0)
+        # t0 = time.perf_counter_ns()
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        final_embed = decoded[Ts * 3 - 1, torch.arange(N), :]
+        final_embed = decoded[lengths * 3 - 1, torch.arange(N), :]
         # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
 
         # 4. Actor head, generate action tuple
@@ -197,5 +206,12 @@ class Actor_TransformerEncoder(nn.Module):
             deterministic=deterministic,
             return_log_prob=return_log_prob,
         )
+        # self.stats[2].append(time.perf_counter_ns() - t0)
+        # t0 = time.perf_counter_ns()
+
+        # if len(self.stats[0]) >= 100:
+        #     print(np.array(self.stats).mean(axis=1) / 1000)
+        #     print(np.array(self.stats).mean(axis=1).sum() / 1000)
+        #     breakpoint()
 
         return action_tuple

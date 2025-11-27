@@ -84,18 +84,15 @@ class Learner:
             )  # oracle in kwargs
 
             # Create parallel environments for training if num_parallel_workers > 1
-            if num_parallel_workers > 1:
-                self.train_env_parallel = make_parallel_env(
-                    env_name,
-                    max_rollouts_per_task,
-                    num_workers=num_parallel_workers,
-                    seed=self.seed,
-                    num_train_tasks=num_train_tasks,
-                    num_eval_tasks=num_eval_tasks,
-                    **kwargs,
-                )
-            else:
-                self.train_env_parallel = None
+            self.train_env_parallel = make_parallel_env(
+                env_name,
+                max_rollouts_per_task,
+                num_workers=num_parallel_workers,
+                seed=self.seed,
+                num_train_tasks=num_train_tasks,
+                num_eval_tasks=num_eval_tasks,
+                **kwargs,
+            )
 
             # Merge kwargs and eval_env, with eval_env taking precedence
             self.eval_env = make_env(
@@ -332,8 +329,9 @@ class Learner:
                 task_info = self.train_env.unwrapped.tasks[task]
                 rollouts = self.nominal_model.rollout_model(1, task_info, True)[0]
                 self.nominal_trajectories[task] = rollouts
-            logger.log(f"Updated max_trajectory_len from {self.max_trajectory_len} to {self.max_trajectory_len + self.train_env.env._max_episode_steps}.")
-            self.max_trajectory_len += self.train_env.env._max_episode_steps
+            print(f"Nominals used, but max_trajectory_len stays at {self.max_trajectory_len}.")
+            # logger.log(f"Updated max_trajectory_len from {self.max_trajectory_len} to {self.max_trajectory_len + self.train_env.env._max_episode_steps}.")
+            # self.max_trajectory_len += self.train_env.env._max_episode_steps
         # self.nominal_trajectories = {int: {'observations': [Tensor[1, 28]], 'rewards': [Tensor[1,1]]}}
 
         if num_updates_per_iter is None:
@@ -423,9 +421,9 @@ class Learner:
         self._start_training()
 
         # Perform initial evaluation before training for debugging
-        # logger.log("Performing initial evaluation before training...")
-        # initial_perf = self.log()
-        # logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+        logger.log("Performing initial evaluation before training...")
+        initial_perf = self.log()
+        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
@@ -703,6 +701,13 @@ class Learner:
 
         # Initialize worker states
         worker_states = {}
+        worker_buffers = {
+            'obs_list': np.zeros((num_workers, self.max_trajectory_len+1, self.obs_dim), dtype=np.float32),
+            'act_list': np.zeros((num_workers, self.max_trajectory_len+1, self.act_dim), dtype=np.float32),
+            'rew_list': np.zeros((num_workers, self.max_trajectory_len+1, 1), dtype=np.float32),
+            'term_list': np.zeros((num_workers, self.max_trajectory_len+1, 1), dtype=np.bool8),
+            'list_len': np.zeros((num_workers, ), dtype=np.int32),
+        }
         for worker_id in range(num_workers):
             if worker_rollout_counts[worker_id] > 0:
                 worker_states[worker_id] = {
@@ -711,11 +716,6 @@ class Learner:
                     'steps': 0,
                     'obs': None,
                     # For memory-based agents
-                    'obs_list': [],
-                    'act_list': [],
-                    'rew_list': [],
-                    'next_obs_list': [],
-                    'term_list': [],
                     'action': None,
                     'reward': None,
                     'internal_state': None,
@@ -743,17 +743,18 @@ class Learner:
             worker_states[worker_id]['steps'] = 0
 
             if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                worker_states[worker_id]['obs_list'] = []
-                worker_states[worker_id]['act_list'] = []
-                worker_states[worker_id]['rew_list'] = []
-                worker_states[worker_id]['next_obs_list'] = []
-                worker_states[worker_id]['term_list'] = []
+                worker_buffers['list_len'][worker_id] = 0
 
             if self.agent_arch == AGENT_ARCHS.Memory:
                 action, reward, internal_state = self.rollout_agent.get_initial_info()
                 worker_states[worker_id]['action'] = action
                 worker_states[worker_id]['reward'] = reward
                 worker_states[worker_id]['internal_state'] = internal_state
+                worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
+                worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
+                worker_buffers['list_len'][worker_id] += 1
 
             if self.use_nominals:
                 task = worker_states[worker_id]['task']
@@ -774,12 +775,14 @@ class Learner:
             
             if self.agent_arch == AGENT_ARCHS.Transformer:
                 action, reward = self.rollout_agent.get_initial_info()
-                worker_states[worker_id]['obs_list'].append(obs)
-                worker_states[worker_id]['act_list'].append(action)
-                worker_states[worker_id]['rew_list'].append(reward)
-                worker_states[worker_id]['next_obs_list'] = None
+                worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
+                worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
+                worker_buffers['list_len'][worker_id] += 1
 
         goals = set()
+        # act_times = [[], [], []]
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
 
@@ -842,12 +845,26 @@ class Learner:
                             # GRU: extract hidden for this worker
                             worker_states[worker_id]['internal_state'] = batch_new_internal_states[:, idx:idx+1, :]
                 elif self.agent_arch == AGENT_ARCHS.Transformer:
-                    batch_obs = [torch.cat(worker_states[wid]['obs_list'], dim=0) for wid in active_workers]
-                    batch_prev_actions = [torch.cat(worker_states[wid]['act_list'], dim=0) for wid in active_workers]
-                    batch_rewards = [torch.cat(worker_states[wid]['rew_list'], dim=0) for wid in active_workers]
-                    batch_actions, _, _, _ = self.rollout_agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=False)
+                    # t1 = time.perf_counter_ns()
+                    batch_lengths = ptu.from_numpy(worker_buffers['list_len'][active_workers]).to(dtype=torch.int64)
+                    L = worker_buffers['list_len'][active_workers].max()
+                    batch_obs = ptu.from_numpy(worker_buffers['obs_list'][active_workers, :L].swapaxes(0, 1)) # (N_activeworkers, L, S)
+                    batch_prev_actions = ptu.from_numpy(worker_buffers['act_list'][active_workers, :L].swapaxes(0, 1))
+                    batch_rewards = ptu.from_numpy(worker_buffers['rew_list'][active_workers, :L].swapaxes(0, 1))
+                    # act_times[0].append(time.perf_counter_ns() - t1)
+                    # t1 = time.perf_counter_ns()
+                    batch_actions, _, _, _ = self.rollout_agent.act(
+                        prev_actions=batch_prev_actions,
+                        obs=batch_obs,
+                        rewards=batch_rewards,
+                        lengths=batch_lengths,
+                        deterministic=False
+                    )
+                    # act_times[1].append(time.perf_counter_ns() - t1)
+                    # t1 = time.perf_counter_ns()
                     for idx, worker_id in enumerate(active_workers):
                         worker_actions[worker_id] = batch_actions[idx:idx+1]
+                    # act_times[2].append(time.perf_counter_ns() - t1)
                 else:
                     # For Markov agents, simply batch observations
                     batch_obs = torch.cat([worker_states[wid]['obs'] for wid in active_workers], dim=0)
@@ -926,17 +943,17 @@ class Learner:
                         next_observation=ptu.get_numpy(next_obs.squeeze(dim=0)),
                     )
                 elif self.agent_arch == AGENT_ARCHS.Transformer:
-                    state['obs_list'].append(next_obs)
-                    state['act_list'].append(action)
-                    state['rew_list'].append(reward)
-                    state['term_list'].append(term)
-                    state['next_obs_list'] = None
+                    worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
+                    worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                    worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                    worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
+                    worker_buffers['list_len'][worker_id] += 1
                 else:  # Memory-based agent
-                    state['obs_list'].append(obs)
-                    state['act_list'].append(action)
-                    state['rew_list'].append(reward)
-                    state['term_list'].append(term)
-                    state['next_obs_list'].append(next_obs)
+                    worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
+                    worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                    worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                    worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
+                    worker_buffers['list_len'][worker_id] += 1
 
                 # Update observation for next step
                 state['obs'] = next_obs.clone()
@@ -948,37 +965,27 @@ class Learner:
                 if done_rollout:
                     # For memory-based agents, add complete episode to buffer
                     if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                        act_buffer = torch.cat(state['act_list'], dim=0)
+                        act_buffer = worker_buffers['act_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]]
                         if not self.act_continuous:
-                            act_buffer = torch.argmax(act_buffer, dim=-1, keepdims=True)
+                            act_buffer = np.argmax(act_buffer, axis=-1, keepdims=True)
 
-                        nominals = None if state['nominal_length'] is None else np.arange(len(state['obs_list'])) < state['nominal_length']
-                        if self.agent_arch == AGENT_ARCHS.Transformer:
-                            self.policy_storage.add_episode(
-                                observations=ptu.get_numpy(torch.cat(state['obs_list'][:-1], dim=0)),
-                                actions=ptu.get_numpy(act_buffer[1:]),
-                                rewards=ptu.get_numpy(torch.cat(state['rew_list'][1:], dim=0)),
-                                terminals=np.array(state['term_list']).reshape(-1, 1),
-                                next_observations=ptu.get_numpy(torch.cat(state['obs_list'][1:], dim=0)),
-                                nominals=nominals,
-                            )
-                        else:
-                            self.policy_storage.add_episode(
-                                observations=ptu.get_numpy(torch.cat(state['obs_list'], dim=0)),
-                                actions=ptu.get_numpy(act_buffer),
-                                rewards=ptu.get_numpy(torch.cat(state['rew_list'], dim=0)),
-                                terminals=np.array(state['term_list']).reshape(-1, 1),
-                                next_observations=ptu.get_numpy(torch.cat(state['next_obs_list'], dim=0)),
-                                nominals=nominals,
-                            )
-                        print(
-                            f"worker_{worker_id} steps: {state['steps']} term: {term} "
-                            f"ret: {torch.cat(state['rew_list'], dim=0).sum().item():.2f}"
-                            f" step: {len(state['obs_list'])}"
-                            + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
+                        nominals = None if state['nominal_length'] is None else np.arange(worker_buffers['list_len'][worker_id]) < state['nominal_length']
+
+                        self.policy_storage.add_episode(
+                            observations = worker_buffers['obs_list'][worker_id, : worker_buffers['list_len'][worker_id] - 1],
+                            actions = act_buffer,
+                            rewards = worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
+                            terminals = worker_buffers['term_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
+                            next_observations = worker_buffers['obs_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
+                            nominals = nominals,
                         )
-                        # if state['steps'] >= 327:
-                        #     breakpoint()
+
+                        # print(
+                        #     f"worker_{worker_id} steps: {state['steps']} term: {term} "
+                        #     f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
+                        #     f" step: {worker_buffers['list_len'][worker_id]}"
+                        #     + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
+                        # )
 
                     # Update statistics
                     self._n_env_steps_total += state['steps']
@@ -1012,27 +1019,32 @@ class Learner:
 
                     # Reset storage for memory-based agents
                     if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                        state['obs_list'] = []
-                        state['act_list'] = []
-                        state['rew_list'] = []
-                        state['next_obs_list'] = []
-                        state['term_list'] = []
+                        worker_buffers['list_len'][worker_id] = 0
 
                     if self.agent_arch == AGENT_ARCHS.Memory:
                         action, reward, internal_state = self.rollout_agent.get_initial_info()
                         state['action'] = action
                         state['reward'] = reward
                         state['internal_state'] = internal_state
+                        worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
+                        worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                        worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                        worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
+                        worker_buffers['list_len'][worker_id] += 1
 
                     if self.agent_arch == AGENT_ARCHS.Transformer:
                         action, reward = self.rollout_agent.get_initial_info()
-                        state['obs_list'].append(obs)
-                        state['act_list'].append(action)
-                        state['rew_list'].append(reward)
-                        state['next_obs_list'] = None
+                        worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
+                        worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                        worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                        worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
+                        worker_buffers['list_len'][worker_id] += 1
 
+        # act_times_avg = np.array(act_times).mean(axis=1)
+        # print(act_times_avg)
         print(f"Ending collection...")
         logger.log(f"Traversed goals: {goals}")
+        # breakpoint()
         return self._n_env_steps_total - before_env_steps
 
     def sample_rl_batch(self, batch_size):
@@ -1128,7 +1140,7 @@ class Learner:
             for episode_idx in range(num_episodes):
                 running_obss = []
                 if "render_pos" in dir(self.eval_env.unwrapped):
-                    running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())))
+                    running_obss.append(list(np.squeeze(self.eval_env.unwrapped.render_pos())) + [0.0])
                 running_reward = 0.0
                 for _ in range(num_steps_per_episode):
                     if self.agent_arch == AGENT_ARCHS.Memory:
@@ -1140,10 +1152,16 @@ class Learner:
                             deterministic=deterministic,
                         )
                     elif self.agent_arch == AGENT_ARCHS.Transformer:
-                        batch_obs = [torch.cat(obss, dim=0)]
-                        batch_prev_actions = [torch.cat(actions, dim=0)]
-                        batch_rewards = [torch.cat(rewards, dim=0)]
-                        batch_actions, _, _, _ = self.agent.act(prev_actions=batch_prev_actions, obs=batch_obs, rewards=batch_rewards, deterministic=deterministic)
+                        batch_obs = torch.cat(obss, dim=0).unsqueeze(dim=1)
+                        batch_prev_actions = torch.cat(actions, dim=0).unsqueeze(dim=1)
+                        batch_rewards = torch.cat(rewards, dim=0).unsqueeze(dim=1)
+                        batch_actions, _, _, _ = self.agent.act(
+                            prev_actions=batch_prev_actions,
+                            obs=batch_obs,
+                            rewards=batch_rewards,
+                            lengths=ptu.FloatTensor([batch_obs.shape[0]]).to(dtype=torch.int64),
+                            deterministic=deterministic
+                        )
                         action = batch_actions
                         assert batch_actions.shape[0] == 1
                     else:

@@ -1,4 +1,4 @@
-seed: 40
+seed: 41
 cuda: 0 # use_gpu
 env:
   env_type: meta
@@ -11,9 +11,8 @@ env:
   task_mode: circle
   reward_conditioning: no
   goal_conditioning: yes
-  infinite_tasks: yes
   normalize_kwarg: true
-  num_parallel_workers: 16
+  num_parallel_workers: 100
 
   eval_env:
     goal_conditioning: yes
@@ -31,7 +30,7 @@ train:
   buffer_size: 1e6
 
   num_updates_per_iter: 0.02 # equal, or positive integer
-  batch_size: 32 # to tune based on sampled_seq_len
+  batch_size: 18 # to tune based on sampled_seq_len
   sampled_seq_len: -1 # -1 is all, or positive integer
   sample_weight_baseline: 0.0
 
@@ -49,7 +48,7 @@ policy:
   observ_embedding_size: 48
   reward_embedding_size: 48
   rnn_hidden_size: 128
-  rnn_num_layers: 4
+  rnn_num_layers: 3
 
   dqn_layers: [128, 128]
   policy_layers: [128, 128]

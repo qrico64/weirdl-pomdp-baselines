@@ -92,13 +92,13 @@ class Critic_TransformerEncoder(nn.Module):
             return self.image_encoder(observs)
 
     def get_hidden_states(self, obs, prev_actions, rewards) -> torch.Tensor:
-        T, N, _ = rewards.shape
+        # T, N, _ = rewards.shape
         # assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
         # assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
         # assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
-        obs_encs = self._get_obs_embedding(obs.reshape(T * N, self.obs_dim)).reshape(T, N, self.hidden_size)
-        action_encs = self.action_embedder(prev_actions.reshape(T * N, self.action_dim)).reshape(T, N, self.hidden_size)
-        reward_encs = self.reward_embedder(rewards.reshape(T * N, 1)).reshape(T, N, self.hidden_size)
+        obs_encs = self._get_obs_embedding(obs)
+        action_encs = self.action_embedder(prev_actions)
+        reward_encs = self.reward_embedder(rewards)
         context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
         context += pos

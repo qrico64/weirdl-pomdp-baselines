@@ -109,6 +109,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         prev_actions,
         rewards,
         obs,
+        lengths,
         deterministic=False,
         return_log_prob=False,
     ):
@@ -116,6 +117,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             prev_actions=prev_actions,
             rewards=rewards,
             obs=obs,
+            lengths=lengths,
             deterministic=deterministic,
             return_log_prob=return_log_prob,
         )
