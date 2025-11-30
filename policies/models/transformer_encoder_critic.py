@@ -6,6 +6,7 @@ from torchkit.constant import *
 from utils import logger
 from policies.models.transformer_related import positional_embeddings
 from torchkit import pytorch_utils as ptu
+from typing import Literal
 
 
 class Critic_TransformerEncoder(nn.Module):
@@ -18,11 +19,12 @@ class Critic_TransformerEncoder(nn.Module):
         action_embedding_size,
         observ_embedding_size,
         reward_embedding_size,
-        rnn_hidden_size,
         dqn_layers,
         rnn_num_layers,
         max_len, # Maximum sequence length
         image_encoder=None,
+        feature_extractor_type: Literal['separate', 'combined1'] = 'separate',
+        combined_embedding_size: int = None,
         **kwargs
     ):
         assert max_len is not None
@@ -48,17 +50,33 @@ class Critic_TransformerEncoder(nn.Module):
             assert observ_embedding_size == 0
             observ_embedding_size = self.image_encoder.embed_size  # reset it
 
-        self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
-        self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
-
-        ## 2. build RNN model
-        assert self.observ_embedding_size == self.action_embedding_size == self.reward_embedding_size
-        self.rnn_hidden_size = rnn_hidden_size
+        logger.log(f"\n****** Creating actor transformer ******")
+        self.feature_extractor_type = feature_extractor_type
+        if self.feature_extractor_type == 'separate':
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            assert self.observ_embedding_size == self.action_embedding_size == self.reward_embedding_size
+            self.hidden_size = self.observ_embedding_size
+            self.max_context_len = max_len * 3 + 4
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size})")
+        elif self.feature_extractor_type == 'combined1':
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            assert isinstance(combined_embedding_size, int)
+            self.combined_embedding_size = combined_embedding_size
+            self.combined_embedder = utl.FeatureExtractor(
+                self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size,
+                self.combined_embedding_size,
+                F.relu,
+            )
+            self.hidden_size = self.combined_embedding_size
+            self.max_context_len = max_len + 1
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size}) -> ({self.combined_embedding_size})")
+        else:
+            raise NotImplementedError(f"{self.feature_extractor_type}")
 
         self.num_layers = rnn_num_layers
 
-        self.hidden_size = self.observ_embedding_size
-        logger.log(f"\n****** Creating actor transformer ******")
         logger.log(f"d_model = {self.hidden_size}")
         logger.log(f"nhead = {4}")
         logger.log(f"dim_feedforward = {self.hidden_size * 4}")
@@ -78,12 +96,15 @@ class Critic_TransformerEncoder(nn.Module):
 
         ## 4. build q networks
         self.qf1, self.qf2 = self.algo.build_critic(
-            input_size=self.hidden_size*2,
+            input_size=self.hidden_size + self.action_embedding_size,
             hidden_sizes=dqn_layers,
             action_dim=action_dim,
         )
 
-        self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=max_len*3+4)
+        self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.max_context_len)
+        self.mask = torch.triu(ptu.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
+        self.mask = self.mask.masked_fill(self.mask == 1, float('-inf'))
+        self.register_buffer("my_mask", self.mask)
 
     def _get_obs_embedding(self, observs: torch.Tensor) -> torch.Tensor:
         if self.image_encoder is None:  # vector obs
@@ -99,7 +120,13 @@ class Critic_TransformerEncoder(nn.Module):
         obs_encs = self._get_obs_embedding(obs)
         action_encs = self.action_embedder(prev_actions)
         reward_encs = self.reward_embedder(rewards)
-        context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
+        if self.feature_extractor_type == 'separate':
+            context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
+        elif self.feature_extractor_type == 'combined1':
+            concat_encs = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
+            context = self.combined_embedder(concat_encs)
+        else:
+            raise NotImplementedError()
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
         context += pos
 
@@ -115,20 +142,20 @@ class Critic_TransformerEncoder(nn.Module):
         """
         obs = observs
 
-        T, N, _ = rewards.shape
         context = self.get_hidden_states(obs, prev_actions, rewards)
+        T, N, _ = context.shape
         # assert context.shape == (T * 3, N, self.hidden_size)
 
         # assert current_actions is not None
         # assert current_actions.shape == (T, N, prev_actions.shape[2]) or current_actions.shape == (T - 1, N, prev_actions.shape[2]), f"{current_actions.shape} != {(T, N, prev_actions.shape[2])} or {(T - 1, N, prev_actions.shape[2])}"
         curaT = current_actions.shape[0]
-        current_actions_encs = self.action_embedder(current_actions.reshape(curaT * N, self.action_dim)).reshape(curaT, N, self.hidden_size)
+        current_actions_encs = self.action_embedder(current_actions)
 
-        mask = torch.triu(ptu.ones(T * 3, T * 3), diagonal=1).float()
-        mask = mask.masked_fill(mask == 1, float('-inf'))
+        mask = self.mask[:T, :T]
         decoded = self.transformer(context, mask=mask)
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        obs_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
+        obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
+        obs_embeds = decoded[obs_embed_indx, :, :]
         # assert obs_embeds.shape == (T, N, self.hidden_size), f"{obs_embeds.shape} != {(T, N, self.hidden_size)}"
         final_embeds = torch.cat([obs_embeds[:curaT], current_actions_encs], dim=-1)
         # assert final_embeds.shape == (curaT, N, self.hidden_size * 2)

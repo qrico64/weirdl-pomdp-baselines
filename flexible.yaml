@@ -1,4 +1,4 @@
-seed: 41
+seed: 40
 cuda: 0 # use_gpu
 env:
   env_type: meta
@@ -12,7 +12,7 @@ env:
   reward_conditioning: no
   goal_conditioning: yes
   normalize_kwarg: true
-  num_parallel_workers: 100
+  num_parallel_workers: 50
 
   eval_env:
     goal_conditioning: yes
@@ -27,7 +27,7 @@ train:
   num_iters: 3000
   num_init_rollouts_pool: 500 # before training
   num_rollouts_per_iter: 30  #
-  buffer_size: 1e6
+  buffer_size: 3e6
 
   num_updates_per_iter: 0.02 # equal, or positive integer
   batch_size: 18 # to tune based on sampled_seq_len
@@ -42,16 +42,16 @@ eval:
 
 policy:
   seq_model: transformer # [lstm, gru]
+  feature_extractor_type: separate
   algo_name: sac # [td3, sac]
 
-  action_embedding_size: 48
-  observ_embedding_size: 48
-  reward_embedding_size: 48
-  rnn_hidden_size: 128
+  action_embedding_size: 64
+  observ_embedding_size: 64
+  reward_embedding_size: 64
   rnn_num_layers: 3
 
-  dqn_layers: [128, 128]
-  policy_layers: [128, 128]
+  dqn_layers: [256, 256]
+  policy_layers: [256, 256]
   lr: 0.0003
   gamma: 0.99
   tau: 0.005

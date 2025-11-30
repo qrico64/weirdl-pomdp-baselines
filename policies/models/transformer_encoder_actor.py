@@ -8,25 +8,7 @@ from utils import logger
 from policies.models.transformer_related import positional_embeddings
 import time
 import numpy as np
-
-
-def collectivize_inputs(prev_actions, rewards, obs):
-    # assert isinstance(rewards, list)
-    # assert isinstance(prev_actions, list)
-    # assert isinstance(obs, list)
-    # assert len(prev_actions) == len(rewards) == len(obs)
-    N = len(rewards)
-    Ts = [traj.shape[0] for traj in rewards]
-    T = max(Ts)
-    rewards_tensor = ptu.zeros(T, N, rewards[0].shape[-1], dtype=rewards[0].dtype)
-    obs_tensor = ptu.zeros(T, N, obs[0].shape[-1], dtype=obs[0].dtype)
-    prev_actions_tensor = ptu.zeros(T, N, prev_actions[0].shape[-1], dtype=prev_actions[0].dtype)
-    for i in range(N):
-        rewards_tensor[:rewards[i].shape[0],i,:] = rewards[i]
-        obs_tensor[:obs[i].shape[0],i,:] = obs[i]
-        prev_actions_tensor[:prev_actions[i].shape[0],i,:] = prev_actions[i]
-    
-    return prev_actions_tensor, rewards_tensor, obs_tensor, ptu.tensor(Ts)
+from typing import Literal
 
 
 class Actor_TransformerEncoder(nn.Module):
@@ -39,11 +21,12 @@ class Actor_TransformerEncoder(nn.Module):
         action_embedding_size,
         observ_embedding_size,
         reward_embedding_size,
-        rnn_hidden_size,
         policy_layers,
         rnn_num_layers,
         max_len, # Maximum sequence length
         image_encoder=None,
+        feature_extractor_type: Literal['separate', 'combined1'] = 'separate',
+        combined_embedding_size: int = None,
         **kwargs
     ):
         assert max_len is not None
@@ -70,17 +53,33 @@ class Actor_TransformerEncoder(nn.Module):
             assert observ_embedding_size == 0
             observ_embedding_size = self.image_encoder.embed_size  # reset it
 
-        self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
-        self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
-
-        ## 2. build RNN model
-        assert self.observ_embedding_size == self.action_embedding_size == self.reward_embedding_size
-        self.rnn_hidden_size = rnn_hidden_size
+        logger.log(f"\n****** Creating actor transformer ******")
+        self.feature_extractor_type = feature_extractor_type
+        if self.feature_extractor_type == 'separate':
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            assert self.observ_embedding_size == self.action_embedding_size == self.reward_embedding_size
+            self.hidden_size = self.observ_embedding_size
+            self.max_context_len = max_len * 3 + 4
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size})")
+        elif self.feature_extractor_type == 'combined1':
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            assert isinstance(combined_embedding_size, int)
+            self.combined_embedding_size = combined_embedding_size
+            self.combined_embedder = utl.FeatureExtractor(
+                self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size,
+                self.combined_embedding_size,
+                F.relu,
+            )
+            self.hidden_size = self.combined_embedding_size
+            self.max_context_len = max_len + 1
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size}) -> ({self.combined_embedding_size})")
+        else:
+            raise NotImplementedError(f"{self.feature_extractor_type}")
 
         self.num_layers = rnn_num_layers
 
-        self.hidden_size = self.observ_embedding_size
-        logger.log(f"\n****** Creating actor transformer ******")
         logger.log(f"d_model = {self.hidden_size}")
         logger.log(f"nhead = {4}")
         logger.log(f"dim_feedforward = {self.hidden_size * 4}")
@@ -105,9 +104,8 @@ class Actor_TransformerEncoder(nn.Module):
             hidden_sizes=policy_layers,
         )
 
-        self.MAX_3T = max_len * 3 + 4
-        self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.MAX_3T)
-        self.mask = torch.triu(ptu.ones(self.MAX_3T, self.MAX_3T), diagonal=1).float()
+        self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.max_context_len)
+        self.mask = torch.triu(ptu.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
         self.mask = self.mask.masked_fill(self.mask == 1, float('-inf'))
         self.register_buffer("my_mask", self.mask)
 
@@ -127,7 +125,13 @@ class Actor_TransformerEncoder(nn.Module):
         obs_encs = self._get_obs_embedding(obs)
         action_encs = self.action_embedder(prev_actions)
         reward_encs = self.reward_embedder(rewards)
-        context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
+        if self.feature_extractor_type == 'separate':
+            context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
+        elif self.feature_extractor_type == 'combined1':
+            concat_encs = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
+            context = self.combined_embedder(concat_encs)
+        else:
+            raise NotImplementedError()
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
         context += pos
 
@@ -143,20 +147,21 @@ class Actor_TransformerEncoder(nn.Module):
         """
         obs = observs
         
-        T, N, _ = rewards.shape
         context = self.get_hidden_states(obs, prev_actions, rewards)
-        # assert context.shape == (T * 3, N, self.hidden_size)
+        T, N, _ = context.shape
+        # assert context.shape == (T, N, self.hidden_size)
 
-        mask = self.mask[:T * 3, :T * 3]
+        mask = self.mask[:T, :T]
         decoded = self.transformer(context, mask=mask)
-        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        obs_embeds = decoded[torch.arange(2, T * 3, 3), :, :]
+        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T, N, self.hidden_size), f"{decoded.shape} != {(T, N, self.hidden_size)}"
+        obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
+        obs_embeds = decoded[obs_embed_indx, :, :]
         # assert obs_embeds.shape == (T, N, self.hidden_size)
         actions, log_probs = self.algo.forward_actor(actor=self.policy, observ=obs_embeds)
         # assert actions.shape == (T, N, prev_actions.shape[2])
         # assert log_probs.shape == (T, N, 1)
         return actions, log_probs
-        # final_embed = decoded[T * 3 - 1, :, :]
+        # final_embed = decoded[T - 1, :, :]
         # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
 
         # return self.algo.forward_actor(actor=self.policy, observ=final_embed)
@@ -183,20 +188,21 @@ class Actor_TransformerEncoder(nn.Module):
     ):
         # assert lengths.dtype == torch.int64
         # t0 = time.perf_counter_ns()
-        T, N, _ = rewards.shape
         # assert T == lengths.max(), f"{T} != {lengths.max()}"
-        
+
         context = self.get_hidden_states(obs, prev_actions, rewards)
+        T, N, _ = context.shape
         # self.stats[0].append(time.perf_counter_ns() - t0)
         # t0 = time.perf_counter_ns()
         # assert context.shape == (T * 3, N, self.hidden_size)
 
-        mask = self.mask[:T * 3, :T * 3]
+        mask = self.mask[:T, :T]
+        obs_embed_idx = lengths * 3 - 1 if self.feature_extractor_type == 'separate' else lengths - 1
         decoded = self.transformer(context, mask=mask)
         # self.stats[1].append(time.perf_counter_ns() - t0)
         # t0 = time.perf_counter_ns()
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        final_embed = decoded[lengths * 3 - 1, torch.arange(N), :]
+        final_embed = decoded[obs_embed_idx, torch.arange(N), :]
         # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
 
         # 4. Actor head, generate action tuple

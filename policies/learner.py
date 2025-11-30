@@ -1058,8 +1058,8 @@ class Learner:
     def update(self, num_updates):
         rl_losses_agg = {}
         for update in range(num_updates):
-            if update % 20 == 0 or update == num_updates - 1:
-                print(f"Updated {update} times.")
+            if update % 40 == 0 or update == num_updates - 1:
+                print(f"Updated {update}/{num_updates} times.")
             # sample random RL batch: in transitions
             batch = self.sample_rl_batch(self.batch_size)
 

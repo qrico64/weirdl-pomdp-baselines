@@ -40,7 +40,6 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         action_embedding_size,
         observ_embedding_size,
         reward_embedding_size,
-        rnn_hidden_size,
         dqn_layers,
         policy_layers,
         rnn_num_layers=1,
@@ -50,6 +49,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         # pixel obs
         image_encoder_fn=lambda: None,
         max_len=None,
+        feature_extractor_type = 'separate',
+        combined_embedding_size: int = None,
         **kwargs
     ):
         super().__init__()
@@ -70,11 +71,12 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             action_embedding_size,
             observ_embedding_size,
             reward_embedding_size,
-            rnn_hidden_size,
             dqn_layers,
             rnn_num_layers,
             max_len=max_len,
             image_encoder=image_encoder_fn(),  # separate weight
+            feature_extractor_type=feature_extractor_type,
+            combined_embedding_size=combined_embedding_size,
         )
         self.critic_optimizer = Adam(self.critic.parameters(), lr=lr)
         # target networks
@@ -89,11 +91,12 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             action_embedding_size,
             observ_embedding_size,
             reward_embedding_size,
-            rnn_hidden_size,
             policy_layers,
             rnn_num_layers,
             max_len=max_len,
             image_encoder=image_encoder_fn(),  # separate weight
+            feature_extractor_type=feature_extractor_type,
+            combined_embedding_size=combined_embedding_size,
         )
         self.actor_optimizer = Adam(self.actor.parameters(), lr=lr)
         # target networks
