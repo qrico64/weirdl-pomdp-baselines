@@ -126,6 +126,75 @@ def render_dot(
     img[mask] = draw_color
     return img
 
+def render_text(
+    image: np.ndarray,
+    text: str,
+    position: Tuple[int, int],
+    color: Tuple[int, int, int] = (255, 255, 255),
+    scale: int = 1,
+) -> np.ndarray:
+    """
+    Render simple text on an image using basic block characters.
+
+    Args:
+        image: (H, W, 3) array, dtype uint8.
+        text: Text string to render.
+        position: (row, col) top-left position to start text.
+        color: (R, G, B) color tuple.
+        scale: Scale factor for text size (1 = 5x7 pixels per char).
+
+    Returns:
+        Image with text rendered.
+    """
+    try:
+        import cv2
+        img = image.copy()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5 * scale
+        thickness = max(1, scale)
+        cv2.putText(img, text, (position[1], position[0]), font, font_scale, color, thickness, cv2.LINE_AA)
+        return img
+    except ImportError:
+        # Fallback: simple block-based text rendering without OpenCV
+        img = image.copy()
+        # Simple 5x3 bitmap font for digits and basic characters
+        FONT = {
+            '0': [[1,1,1],[1,0,1],[1,0,1],[1,0,1],[1,1,1]],
+            '1': [[0,1,0],[1,1,0],[0,1,0],[0,1,0],[1,1,1]],
+            '2': [[1,1,1],[0,0,1],[1,1,1],[1,0,0],[1,1,1]],
+            '3': [[1,1,1],[0,0,1],[1,1,1],[0,0,1],[1,1,1]],
+            '4': [[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],
+            '5': [[1,1,1],[1,0,0],[1,1,1],[0,0,1],[1,1,1]],
+            '6': [[1,1,1],[1,0,0],[1,1,1],[1,0,1],[1,1,1]],
+            '7': [[1,1,1],[0,0,1],[0,0,1],[0,0,1],[0,0,1]],
+            '8': [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],
+            '9': [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]],
+            '.': [[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,1,0]],
+            '-': [[0,0,0],[0,0,0],[1,1,1],[0,0,0],[0,0,0]],
+            ' ': [[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]],
+            ':': [[0,0,0],[0,1,0],[0,0,0],[0,1,0],[0,0,0]],
+        }
+
+        row, col = position
+        char_width = 4 * scale  # 3 pixels + 1 spacing
+        char_height = 5 * scale
+
+        for i, char in enumerate(str(text)):
+            if char not in FONT:
+                continue
+            bitmap = FONT[char]
+            x_offset = col + i * char_width
+            for y in range(5):
+                for x in range(3):
+                    if bitmap[y][x]:
+                        for dy in range(scale):
+                            for dx in range(scale):
+                                py = row + y * scale + dy
+                                px = x_offset + x * scale + dx
+                                if 0 <= py < image.shape[0] and 0 <= px < image.shape[1]:
+                                    img[py, px] = color
+        return img
+
 def render_line(
     image: np.ndarray,
     point: Tuple[float, float],

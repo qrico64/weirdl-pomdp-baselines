@@ -10,7 +10,30 @@ import tqdm
 from scripts.delete_empties import env_steps_all_empty
 from envs.meta.make_env import make_env
 from scripts.read_yaml import read_yaml_in_experiment
-from scripts.render import stack_frames, write_video_mp4, render_circle, render_dot, render_line
+from scripts.render import stack_frames, write_video_mp4, render_circle, render_dot, render_line, render_text
+
+
+def backwards_compatible_trajectory_generation(trajectories_str: str):
+    trajectories = eval(trajectories_str)
+    res = []
+    for trajectory in trajectories:
+        N = len(trajectory)
+        cur_output = np.zeros((N, 3))
+        for i, entry in enumerate(trajectory):
+            if len(entry) == 4:
+                cur_output[i,:2] = entry[:2]
+                cur_output[i,2] = entry[3]
+            elif len(entry) == 3:
+                cur_output[i,:2] = entry[:2]
+                cur_output[i,2] = 0
+            elif len(entry) == 2:
+                cur_output[i,:2] = entry[:2]
+                cur_output[i,2] = None
+            else:
+                raise NotImplementedError()
+        res.append(cur_output)
+    return res
+
 
 def plot_trajectories_pointenv(dir: str):
     log_file = os.path.join(dir, "experiment.log")
@@ -55,9 +78,8 @@ def plot_trajectories_pointenv(dir: str):
                     task_pos = eval(line.split('Goal ')[1].split(' Wind')[0])
                 else:
                     task_pos = env.goals[task_idx]
-            trajectories = eval(lines_truncated[idx + 1])
-            trajectories = [np.array(trajectory)[:,:2] for trajectory in trajectories]
-            assert all(trajectory.ndim == 2 and trajectory.shape[1] == 2 for trajectory in trajectories), f"{[trajectory.shape for trajectory in trajectories]}"
+            trajectories = backwards_compatible_trajectory_generation(lines_truncated[idx + 1])
+            assert all(trajectory.ndim == 2 and trajectory.shape[1] == 3 for trajectory in trajectories), f"{[trajectory.shape for trajectory in trajectories]}"
             if env_step not in movement:
                 movement[env_step] = {}
             if task_idx not in movement:
@@ -67,8 +89,8 @@ def plot_trajectories_pointenv(dir: str):
             movement[env_step][task_idx]['trajectories'] = trajectories
 
             if config['env']['env_name'] == "AntDir-v0":
-                mins = np.array([trajectory.min(axis=0) for trajectory in trajectories]).min(axis=0)
-                maxs = np.array([trajectory.max(axis=0) for trajectory in trajectories]).max(axis=0)
+                mins = np.array([trajectory.min(axis=0) for trajectory in trajectories]).min(axis=0)[:2]
+                maxs = np.array([trajectory.max(axis=0) for trajectory in trajectories]).max(axis=0)[:2]
             else:
                 mins = env.goals.min(axis=0) - 0.5
                 maxs = env.goals.max(axis=0) + 0.5
@@ -89,6 +111,8 @@ def plot_trajectories_pointenv(dir: str):
         for traj in info['trajectories']:
             past_frame = np.zeros((W, H, 3))
             render_log_file.write(f"{info['task_pos']}\n")
+            running_return = 0.0
+            running_t = 0
             for s in traj:
                 mins = info['mins']
                 maxs = info['maxs']
@@ -113,7 +137,15 @@ def plot_trajectories_pointenv(dir: str):
 
                 frame = render_dot(frame, pos_pixel, 5)
                 past_frame = render_dot(past_frame, pos_pixel, 2, color=(0, 255, 0))
-                
+
+                cur_reward = s[2]
+                if cur_reward is not None:
+                    running_return += cur_reward
+                    reward_text = f"Return: {running_return:.3f}"
+                    frame = render_text(frame, reward_text, position=(20, 20), color=(255, 255, 255), scale=1)
+                running_t += 1
+                frame = render_text(frame, f"t: {running_t}", position=(50, 20), color=(255, 255, 255), scale=1)
+
                 frames.append(frame.astype(np.uint8))
             frames += [frames[-1] for i in range(5)]
         frames += [frames[-1] for i in range(10)]
