@@ -297,7 +297,8 @@ def log(*args, level=INFO):
     """
     Write the sequence of args, with no separators, to the console and output files (if you've configured an output file).
     """
-    Logger.CURRENT.log(*args, level=level)
+    args_str = ' '.join([str(arg) for arg in args])
+    Logger.CURRENT.log(f"[{str(datetime.datetime.now())}] {args_str}", level=level)
 
 
 def debug(*args):

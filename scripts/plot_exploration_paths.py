@@ -54,6 +54,7 @@ def plot_trajectories_pointenv(dir: str):
     idx_from = 0
     idx_env_step = 0
     for idx, line in enumerate(lines):
+        line = line[line.find("] ") + 2:]
         if line.startswith("env steps "):
             idx_env_step = idx
         if line.startswith("Task "):
@@ -62,6 +63,7 @@ def plot_trajectories_pointenv(dir: str):
     
     lines_truncated = lines[idx_from:]
     for idx, line in enumerate(lines_truncated):
+        line = line[line.find("] ") + 2:]
         if line.startswith("env steps "):
             assert line.replace('env steps ', '').isnumeric()
             env_step = int(line.replace('env steps ', ''))

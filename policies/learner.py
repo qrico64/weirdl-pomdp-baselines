@@ -893,7 +893,7 @@ class Learner:
             for worker_id in worker_actions.keys():
                 msg_type, (next_obs_np, reward_np, done_np, info) = parallel_env.remotes[worker_id].recv()
                 assert msg_type == 'transition'
-                goals.add([next_obs_np[-2], next_obs_np[-1]])
+                goals.add((next_obs_np[-2], next_obs_np[-1]))
 
                 # Convert to torch tensors (matching utl.env_step format)
                 next_obs = ptu.from_numpy(next_obs_np).view(-1, next_obs_np.shape[0])
