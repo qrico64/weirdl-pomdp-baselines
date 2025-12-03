@@ -1,4 +1,4 @@
-from gym.envs.registration import register
+from gymnasium.envs.registration import register
 from envs.credit_assign.key_to_door import key_to_door
 
 delay_fn = lambda runs: (runs - 1) * 7 + 6

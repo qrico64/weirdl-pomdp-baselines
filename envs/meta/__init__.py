@@ -1,4 +1,4 @@
-from gym.envs.registration import register
+from gymnasium.envs.registration import register
 
 ## off-policy variBAD benchmark
 
@@ -39,6 +39,16 @@ register(
         "max_episode_steps": 200,
     },
     max_episode_steps=200,
+)
+
+register(
+    "PegInsertion-v0",
+    entry_point="envs.meta.wrappers:mujoco_wrapper",
+    kwargs={
+        "entry_point": "envs.meta.mujoco.peg_insertion:PegInsertionEnv",
+        "max_episode_steps": 150,
+    },
+    max_episode_steps=150,
 )
 
 register(

@@ -6,7 +6,7 @@ import time
 import datetime
 import dateutil.tz
 import tempfile
-from collections import OrderedDict, Set
+from collections import OrderedDict
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -24,7 +24,7 @@ ERROR = 40
 DISABLED = 50
 
 
-class OrderedSet(Set):
+class OrderedSet(set):
     # https://stackoverflow.com/a/10006674/9072850
     def __init__(self, iterable=()):
         self.d = OrderedDict.fromkeys(iterable)

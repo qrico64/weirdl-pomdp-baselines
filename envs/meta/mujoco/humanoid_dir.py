@@ -3,8 +3,8 @@
     https://github.com/lmzintgraf/varibad/blob/master/environments/mujoco/humanoid_dir.py
 """
 import numpy as np
-from gym.envs.mujoco import HumanoidEnv as HumanoidEnv
-from gym import spaces
+from gymnasium.envs.mujoco import HumanoidEnv as HumanoidEnv
+from gymnasium import spaces
 
 import random
 

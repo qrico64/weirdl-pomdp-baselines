@@ -1,10 +1,10 @@
-import gym
+import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import random
-from gym import spaces
-from gym.utils import seeding
+from gymnasium import spaces
+from gymnasium.utils import seeding
 from torchkit import pytorch_utils as ptu
 from matplotlib.patches import Rectangle
 

@@ -128,7 +128,7 @@ class Critic_TransformerEncoder(nn.Module):
         else:
             raise NotImplementedError()
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
-        context += pos
+        context = context + pos
 
         return context  # (T * 3, N, self.hidden_size)
 

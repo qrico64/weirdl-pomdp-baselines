@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 
 from envs.meta.wrappers import VariBadWrapper
 from envs.parallel_env_manager import ParallelEnvManager
@@ -11,10 +11,10 @@ def make_env(env_id, episodes_per_task, seed=None, oracle=False, **kwargs):
     """
     kwargs: include n_tasks=num_tasks
     """
-    env = gym.make(env_id, **kwargs)
+    env = gym.make(env_id, seed=seed, **kwargs)
     if seed is not None:
-        env.seed(seed)
-        env.action_space.np_random.seed(seed)
+        # env.unwrapped.seed(seed)
+        env.action_space.seed(seed)
     env = VariBadWrapper(
         env=env,
         episodes_per_task=episodes_per_task,
@@ -41,11 +41,11 @@ def make_parallel_env(env_id, episodes_per_task, num_workers, seed=None, oracle=
     def make_single_env(rank):
         """Factory function to create a single environment for a worker."""
         def _init():
-            env = gym.make(env_id, **kwargs)
+            env = gym.make(env_id, seed=seed, **kwargs)
             env_seed = seed + rank if seed is not None else None
             if env_seed is not None:
-                env.seed(env_seed)
-                env.action_space.np_random.seed(env_seed)
+                # env.unwrapped.seed(seed)
+                env.action_space.seed(seed)
             env = VariBadWrapper(
                 env=env,
                 episodes_per_task=episodes_per_task,

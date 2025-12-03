@@ -1,4 +1,4 @@
-from gym.wrappers.time_limit import TimeLimit as TimeLimitBase, time
+from gymnasium.wrappers.time_limit import TimeLimit as TimeLimitBase, time
 
 
 class TimeLimit(TimeLimitBase):

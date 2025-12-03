@@ -4,8 +4,8 @@ import Box2D as box_2d
 import cocos
 import numpy as np
 import pyglet
-from gym import error, spaces
-from gym.utils import seeding
+from gymnasium import error, spaces
+from gymnasium.utils import seeding
 
 from .base import BaseGymEnvironment
 

@@ -1,6 +1,6 @@
 for seed in 44; do
-    job_name="nov29_logging_circle_3layers_separate_src_key_padding_mask_$((seed - 39))"
-    python ./dtrain.py -j "$job_name" --account cse --qos gpu-l40s -sH 24 --mem 160 --cpus 12 \
+    job_name="dec2_py310_peg_fixed_combined1_$((seed - 39))"
+    python ./dtrain.py -j "$job_name" --account weirdlab --qos gpu-l40 -sH 24 --mem 180 --cpus 16 \
     -- python policies/main.py \
         --cfg flexible.yaml \
         --seed "$seed"

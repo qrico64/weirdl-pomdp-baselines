@@ -1,14 +1,18 @@
-from gym.envs.registration import load
-import gym
+import gymnasium as gym
 import numpy as np
-from gym import spaces
+from gymnasium import spaces
+import importlib
 
 
-def mujoco_wrapper(entry_point, **kwargs):
-    # Load the environment from its entry point
-    env_cls = load(entry_point)
-    env = env_cls(**kwargs)
-    return env
+def load_class(entry_point: str):
+    # entry_point is "module.submodule:ClassName"
+    module_name, class_name = entry_point.split(":")
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
+
+def mujoco_wrapper(entry_point: str, **kwargs):
+    env_cls = load_class(entry_point)
+    return env_cls(**kwargs)
 
 
 class VariBadWrapper(gym.Wrapper):
@@ -92,16 +96,13 @@ class VariBadWrapper(gym.Wrapper):
     def reset(self, task=None, **kwargs):
 
         # reset task -- this sets goal and state -- sets self.env._goal and self.env._state
-        self.env.reset_task(task, **kwargs)
+        self.env.unwrapped.reset_task(task, **kwargs)
 
         self.episode_count = 0
         self.step_count_bamdp = 0
 
         # normal reset
-        try:
-            state = self.env.reset()
-        except AttributeError:
-            state = self.env.unwrapped.reset()
+        state, info = self.env.reset()
 
         self.done_mdp = False
 
@@ -114,7 +115,7 @@ class VariBadWrapper(gym.Wrapper):
         return state
 
     def reset_mdp(self):
-        state = self.env.reset()
+        state, info = self.env.reset()
         self.done_mdp = False
 
         return self._get_obs(state)
@@ -129,7 +130,8 @@ class VariBadWrapper(gym.Wrapper):
             action = np.clip(action, lb, ub)
 
         # do normal environment step in MDP
-        state, reward, self.done_mdp, info = self.env.step(action)
+        state, reward, terminated, truncated, info = self.env.step(action)
+        self.done_mdp = terminated or truncated
 
         info["done_mdp"] = self.done_mdp
         state = self._get_obs(state)

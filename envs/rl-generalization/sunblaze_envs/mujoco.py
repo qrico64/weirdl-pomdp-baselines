@@ -4,7 +4,7 @@ import tempfile
 
 import numpy as np
 import xml.etree.ElementTree as ET
-from gym import spaces
+from gymnasium import spaces
 
 import roboschool
 from roboschool.gym_mujoco_walkers import (

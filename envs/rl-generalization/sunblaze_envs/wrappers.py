@@ -1,7 +1,7 @@
 import collections
 
-import gym
-from gym.envs.registration import load
+import gymnasium as gym
+from gymnasium.envs.registration import load
 import numpy as np
 
 

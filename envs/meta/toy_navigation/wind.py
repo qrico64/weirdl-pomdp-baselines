@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from gym import spaces
-from gym import Env
+from gymnasium import spaces
+from gymnasium import Env
 
 
 class WindEnv(Env):

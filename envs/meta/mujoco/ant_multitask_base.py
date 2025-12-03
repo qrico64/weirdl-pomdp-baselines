@@ -2,7 +2,7 @@ import numpy as np
 
 from .ant import AntEnv
 
-# from gym.envs.mujoco.ant import AntEnv
+# from gymnasium.envs.mujoco.ant import AntEnv
 
 
 class MultitaskAntEnv(AntEnv):

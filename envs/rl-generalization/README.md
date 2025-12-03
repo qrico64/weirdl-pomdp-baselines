@@ -5,7 +5,7 @@ Based on the code https://github.com/sunblaze-ucb/rl-generalization
 From original SunBlaze repo,
 
 ```python
-import gym
+import gymnasium as gym
 import sunblaze_envs
 
 # Deterministic: the default version with fixed parameters
@@ -25,7 +25,7 @@ Specific ranges for each environment setting are listed [here](sunblaze_envs#env
 Similarly, we adopt the environments from [MRPO paper](https://proceedings.mlr.press/v139/jiang21c.html), for example
 
 ```python
-import gym
+import gymnasium as gym
 import sunblaze_envs
 
 MRPO_walker_env = sunblaze_envs.make('MRPOWalker2dRandomNormal-v0')

@@ -2,20 +2,20 @@ seed: 40
 cuda: 0 # use_gpu
 env:
   env_type: meta
-  env_name: AntDir-v0
+  env_name: PegInsertion-v0
   max_rollouts_per_task: 2 # k=2, H=200, H^+ =400
 
-  num_tasks: 36
-  num_train_tasks: 16
+  num_tasks: 24
+  num_train_tasks: 4
   num_eval_tasks: 20
-  task_mode: circle
+  task_mode: fixed
   reward_conditioning: no
-  goal_conditioning: yes
+  goal_conditioning: yes_target
   normalize_kwarg: true
-  num_parallel_workers: 50
+  num_parallel_workers: 30
 
   eval_env:
-    goal_conditioning: yes
+    goal_conditioning: yes_target
     goal_noise_magnitude: 0
 
 train:
@@ -42,12 +42,13 @@ eval:
 
 policy:
   seq_model: transformer # [lstm, gru]
-  feature_extractor_type: separate
+  feature_extractor_type: combined1
   algo_name: sac # [td3, sac]
 
-  action_embedding_size: 64
-  observ_embedding_size: 64
-  reward_embedding_size: 64
+  action_embedding_size: 128
+  observ_embedding_size: 128
+  reward_embedding_size: 128
+  combined_embedding_size: 256
   rnn_num_layers: 3
 
   dqn_layers: [256, 256]

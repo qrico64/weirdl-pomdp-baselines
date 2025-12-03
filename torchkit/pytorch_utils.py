@@ -1,4 +1,3 @@
-# -*- coding: future_fstrings -*-
 import torch
 import numpy as np
 import os
@@ -70,7 +69,7 @@ def elem_or_tuple_to_variable(elem_or_tuple):
 
 def filter_batch(np_batch):
     for k, v in np_batch.items():
-        if v.dtype == np.bool:
+        if v.dtype == bool:
             yield k, v.astype(int)
         else:
             yield k, v
@@ -160,3 +159,15 @@ def round_tensor(tensor, n_digits):
 
 def triu(*args, **kwargs):
     return torch.triu(*args, **kwargs).to(device)
+
+
+def format_array_3dec(x: np.ndarray) -> str:
+    if isinstance(x, np.ndarray) and np.issubdtype(x.dtype, np.floating):
+        # Format float arrays to 3 decimal places
+        return np.array2string(
+            x,
+            precision=3,
+            floatmode='fixed',
+            suppress_small=False
+        )
+    return str(x)

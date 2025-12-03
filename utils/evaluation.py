@@ -6,7 +6,7 @@ import matplotlib.colorbar as cbar
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import torch
-import gym
+import gymnasium as gym
 import numpy as np
 from utils import helpers as utl
 from torchkit import pytorch_utils as ptu

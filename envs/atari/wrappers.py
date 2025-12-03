@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import gym.spaces
 import numpy as np
 

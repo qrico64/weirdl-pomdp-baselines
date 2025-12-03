@@ -177,9 +177,10 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         q_target = q_target * masks
         qf1_loss = ((q1_pred - q_target) ** 2).sum() / num_valid  # TD error
         qf2_loss = ((q2_pred - q_target) ** 2).sum() / num_valid  # TD error
+        loss = qf1_loss + qf2_loss
 
         self.critic_optimizer.zero_grad()
-        (qf1_loss + qf2_loss).backward()
+        loss.backward()
         self.critic_optimizer.step()
 
         ### 2. Actor loss

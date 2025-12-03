@@ -1,5 +1,5 @@
 import numpy as np
-from gym.envs.mujoco import HalfCheetahEnv as HalfCheetahEnv_
+from gymnasium.envs.mujoco import HalfCheetahEnv as HalfCheetahEnv_
 import torch
 import matplotlib.pyplot as plt
 from utils import helpers as utl
