@@ -2,7 +2,7 @@ seed: 40
 cuda: 0 # use_gpu
 env:
   env_type: meta
-  env_name: AntDir-v0
+  env_name: AntGoal-v0
   max_rollouts_per_task: 2 # k=2, H=200, H^+ =400
 
   num_tasks: 36
@@ -12,10 +12,12 @@ env:
   reward_conditioning: no
   goal_conditioning: yes
   normalize_kwarg: true
-  num_parallel_workers: 50
+  num_parallel_workers: 30
+  reward_scale: 1.0
+  goal_radius: 0.4
+  infinite_tasks: yes
 
   eval_env:
-    goal_conditioning: yes
     goal_noise_magnitude: 0
 
 train:
@@ -42,12 +44,13 @@ eval:
 
 policy:
   seq_model: transformer # [lstm, gru]
-  feature_extractor_type: separate
+  feature_extractor_type: combined1
   algo_name: sac # [td3, sac]
 
-  action_embedding_size: 64
-  observ_embedding_size: 64
-  reward_embedding_size: 64
+  action_embedding_size: 128
+  observ_embedding_size: 128
+  reward_embedding_size: 128
+  combined_embedding_size: 256
   rnn_num_layers: 3
 
   dqn_layers: [256, 256]
