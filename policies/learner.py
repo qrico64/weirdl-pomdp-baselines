@@ -82,6 +82,7 @@ class Learner:
                 num_eval_tasks=num_eval_tasks,
                 **kwargs,
             )  # oracle in kwargs
+            self.goals = np.array(self.train_env.unwrapped.goals)
 
             # Create parallel environments for training if num_parallel_workers > 1
             self.train_env_parallel = make_parallel_env(
@@ -109,10 +110,9 @@ class Learner:
                 # NOTE: This is off-policy varibad's setting, i.e. limited training tasks
                 # split to train/eval tasks
                 self.train_tasks = np.arange(0, num_train_tasks)
-                goals_temp = np.array(self.train_env.unwrapped.goals)
-                logger.log(f"\n Train goals: {goals_temp[self.train_tasks]}\n")
+                logger.log(f"\n Train goals: {self.goals[self.train_tasks]}\n")
                 self.eval_tasks = np.arange(num_train_tasks, num_train_tasks + num_eval_tasks)
-                logger.log(f"\n Eval goals: {goals_temp[self.eval_tasks]}\n")
+                logger.log(f"\n Eval goals: {self.goals[self.eval_tasks]}\n")
             else:
                 # NOTE: This is on-policy varibad's setting, i.e. unlimited training tasks
                 assert num_tasks == num_train_tasks == None
@@ -325,14 +325,19 @@ class Learner:
             assert os.path.exists(self.nominal_model_config_file), f"Must exist: {self.nominal_model_config_file}"
             self.nominal_model = pull_model(self.nominal_model_config_file, "latest", {})
             self.nominal_trajectories = {}
-            for task in np.concatenate([self.train_tasks, self.eval_tasks], axis=0):
-                task_info = self.train_env.unwrapped.tasks[task]
-                rollouts = self.nominal_model.rollout_model(1, task_info, True)[0]
-                self.nominal_trajectories[task] = rollouts
+            fix_goals = self.goals.tolist()
+            nominal_rollouts = self.nominal_model.collect_rollouts_parallel(
+                num_rollouts=len(self.goals),
+                random_actions=False,
+                parallel_env=self.train_env_parallel,
+                is_artificial_rollout=True,
+                fix_goals=fix_goals,
+            )
+            assert len(nominal_rollouts) == len(self.train_tasks) + len(self.eval_tasks)
+            for i in range(len(fix_goals)):
+                self.nominal_trajectories[fix_goals[i]] = nominal_rollouts[i]
             print(f"Nominals used, but max_trajectory_len stays at {self.max_trajectory_len}.")
-            # logger.log(f"Updated max_trajectory_len from {self.max_trajectory_len} to {self.max_trajectory_len + self.train_env.env._max_episode_steps}.")
-            # self.max_trajectory_len += self.train_env.env._max_episode_steps
-        # self.nominal_trajectories = {int: {'observations': [Tensor[1, 28]], 'rewards': [Tensor[1,1]]}}
+        # self.nominal_trajectories = {float: {'observations': [Tensor[1, 28]], 'rewards': [Tensor[1,1]]}}
 
         if num_updates_per_iter is None:
             num_updates_per_iter = 1.0
@@ -421,9 +426,9 @@ class Learner:
         self._start_training()
 
         # Perform initial evaluation before training for debugging
-        logger.log("Performing initial evaluation before training...")
-        initial_perf = self.log()
-        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+        # logger.log("Performing initial evaluation before training...")
+        # initial_perf = self.log()
+        # logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
@@ -669,7 +674,8 @@ class Learner:
         return self._n_env_steps_total - before_env_steps
 
     @torch.no_grad()
-    def collect_rollouts_parallel(self, num_rollouts, random_actions=False, parallel_env: ParallelEnvManager = None):
+    def collect_rollouts_parallel(self, num_rollouts, random_actions=False, parallel_env: ParallelEnvManager = None,
+                                  is_artificial_rollout: bool = False, fix_goals: list = None):
         """
         Collect num_rollouts of trajectories in parallel across multiple environment workers.
 
@@ -685,6 +691,14 @@ class Learner:
         """
         if parallel_env is None:
             return self.collect_rollouts(num_rollouts, random_actions)
+        
+        if is_artificial_rollout:
+            assert fix_goals is not None
+            collected_rollouts = [None for _ in range(len(fix_goals))]
+        
+        if fix_goals is None:
+            fix_goals = [None for _ in range(num_rollouts)]
+        assert len(fix_goals) == num_rollouts
 
         # Sync rollout_agent with current agent weights to get a consistent snapshot
         # This avoids reading partially updated weights during parallel training
@@ -715,6 +729,7 @@ class Learner:
                     'active': False,
                     'steps': 0,
                     'obs': None,
+                    'fix_goals_i': -1,
                     # For memory-based agents
                     'action': None,
                     'reward': None,
@@ -724,9 +739,14 @@ class Learner:
                 }
 
         # INITIAL RESET: Send reset commands to ALL workers (non-blocking)
+        fix_goals_i = 0
+        
         for worker_id in worker_states.keys():
             if self.env_type == "meta" and parallel_env.n_tasks is not None:
-                task = self.train_tasks[np.random.randint(len(self.train_tasks))]
+                assert fix_goals_i < len(fix_goals)
+                task = fix_goals[fix_goals_i]
+                worker_states[worker_id]['fix_goals_i'] = fix_goals_i
+                fix_goals_i += 1
             else:
                 task = None
             worker_states[worker_id]['task'] = task
@@ -757,6 +777,7 @@ class Learner:
                 worker_buffers['list_len'][worker_id] += 1
 
             if self.use_nominals:
+                # TODO!!!
                 task = worker_states[worker_id]['task']
                 nominal_trajectory: dict = self.nominal_trajectories[task]
                 virtual_rollout: dict = self.rollout_model_virtually([nominal_trajectory], False)[0]
@@ -971,7 +992,8 @@ class Learner:
 
                         nominals = None if state['nominal_length'] is None else np.arange(worker_buffers['list_len'][worker_id]) < state['nominal_length']
 
-                        self.policy_storage.add_episode(
+                        cur_fix_goals_i = worker_states[worker_id]['fix_goals_i']
+                        rollout_dict = dict(
                             observations = worker_buffers['obs_list'][worker_id, : worker_buffers['list_len'][worker_id] - 1],
                             actions = act_buffer,
                             rewards = worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
@@ -979,13 +1001,17 @@ class Learner:
                             next_observations = worker_buffers['obs_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
                             nominals = nominals,
                         )
+                        if not is_artificial_rollout:
+                            self.policy_storage.add_episode(**rollout_dict)
+                        else:
+                            collected_rollouts[cur_fix_goals_i] = rollout_dict
 
-                        # print(
-                        #     f"worker_{worker_id} steps: {state['steps']} term: {term} "
-                        #     f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
-                        #     f" step: {worker_buffers['list_len'][worker_id]}"
-                        #     + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
-                        # )
+                        print(
+                            f"goal_{cur_fix_goals_i} worker_{worker_id} steps: {state['steps']} term: {term} "
+                            f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
+                            f" step: {worker_buffers['list_len'][worker_id]}"
+                            + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
+                        )
 
                     # Update statistics
                     self._n_env_steps_total += state['steps']
@@ -1001,9 +1027,13 @@ class Learner:
                 # Send reset commands to all workers that need it (non-blocking)
                 for worker_id in workers_to_reset:
                     if self.env_type == "meta" and parallel_env.n_tasks is not None:
-                        task = self.train_tasks[np.random.randint(len(self.train_tasks))]
+                        assert fix_goals_i < len(fix_goals)
+                        task = fix_goals[fix_goals_i]
+                        worker_states[worker_id]['fix_goals_i'] = fix_goals_i
+                        fix_goals_i += 1
                     else:
                         task = None
+                    worker_states[worker_id]['task'] = task
                     parallel_env.remotes[worker_id].send(('reset', {'task': task}))
 
                 # Collect reset responses (workers reset in parallel)
@@ -1042,8 +1072,11 @@ class Learner:
 
         # act_times_avg = np.array(act_times).mean(axis=1)
         # print(act_times_avg)
+        assert fix_goals_i == num_rollouts
         print(f"Ending collection...")
         logger.log(f"Traversed goals: {goals}")
+        if is_artificial_rollout:
+            return collected_rollouts
         # breakpoint()
         return self._n_env_steps_total - before_env_steps
 
@@ -1080,7 +1113,7 @@ class Learner:
 
     @torch.no_grad()
     def evaluate(self, tasks, deterministic=True):
-
+        tasks = np.copy(tasks)
         np.random.shuffle(tasks)
         num_episodes = self.max_rollouts_per_task  # k
         # max_trajectory_len = k*H
@@ -1109,7 +1142,8 @@ class Learner:
             rewards = []
 
             if self.env_type == "meta" and self.eval_env.n_tasks is not None:
-                obs = ptu.from_numpy(self.eval_env.reset(task=task))  # reset task
+                goal = self.goals[task]
+                obs = ptu.from_numpy(self.eval_env.reset(task=goal))  # reset task
                 observations[task_idx, step, :] = ptu.get_numpy(obs[:obs_size])
             else:
                 obs = ptu.from_numpy(self.eval_env.reset())  # reset

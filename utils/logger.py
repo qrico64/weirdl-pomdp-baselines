@@ -299,6 +299,15 @@ def log(*args, level=INFO):
     """
     Logger.CURRENT.log(*args, level=level)
 
+def log_green(*args, level=INFO):
+    log("\033[92m", *args, "\033[0m", level=level)
+
+def log_yellow(*args, level=INFO):
+    log("\033[93m", *args, "\033[0m", level=level)
+
+def log_cyan(*args, level=INFO):
+    log("\033[96m", *args, "\033[0m", level=level)
+
 
 def debug(*args):
     log(*args, level=DEBUG)

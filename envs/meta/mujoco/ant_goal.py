@@ -182,13 +182,20 @@ class AntGoalEnv(MultitaskAntEnv):
         task = {"goal": velocity}
         return task
     
-    def reset_task(self, idx, override_task=None):
-        if self.infinite_tasks == "yes" and idx < self.num_train_tasks:
+    def reset_task(self, goal, override_task=None):
+        if goal is not None:
+            assert isinstance(goal, float)
+            if self.infinite_tasks != "yes":
+                assert goal in self.goals
+            self._goal = goal
+            self._task = {"goal": goal}
+        elif self.infinite_tasks == "yes":
             self._goal = self.train_task_distribution()
             self._task = {"goal": self._goal}
         else:
-            self._task = self.tasks[idx]
-            self._goal = self._task["goal"]
+            self._goal = self.goals[np.random.randint(len(self.goals))]
+            self._task = {"goal": self._goal}
+
         if self.goal_noise_type == "normal":
             self._goal_noise = np.random.randn() * self.goal_noise_magnitude
         elif self.goal_noise_type == "uniform":

@@ -160,3 +160,17 @@ def round_tensor(tensor, n_digits):
 
 def triu(*args, **kwargs):
     return torch.triu(*args, **kwargs).to(device)
+
+
+def print_green(*args):
+    args_str = ' '.join([str(arg) for arg in args])
+    print(f"\033[92m{args_str}\033[0m")
+
+def print_yellow(*args):
+    args_str = ' '.join([str(arg) for arg in args])
+    print(f"\033[93m{args_str}\033[0m")
+
+def print_cyan(*args):
+    args_str = ' '.join([str(arg) for arg in args])
+    print(f"\033[96m{args_str}\033[0m")
+
