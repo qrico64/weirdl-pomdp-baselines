@@ -75,6 +75,12 @@ class Actor_TransformerEncoder(nn.Module):
             self.hidden_size = self.combined_embedding_size
             self.max_context_len = max_len + 1
             logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size}) -> ({self.combined_embedding_size})")
+        elif self.feature_extractor_type == "combined2":
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            self.hidden_size = self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size
+            self.max_context_len = max_len + 1
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {action_embedding_size} + {reward_embedding_size} = {self.hidden_size})")
         else:
             raise NotImplementedError(f"{self.feature_extractor_type}")
 
@@ -130,6 +136,8 @@ class Actor_TransformerEncoder(nn.Module):
         elif self.feature_extractor_type == 'combined1':
             concat_encs = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
             context = self.combined_embedder(concat_encs)
+        elif self.feature_extractor_type == 'combined2':
+            context = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
         else:
             raise NotImplementedError()
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
