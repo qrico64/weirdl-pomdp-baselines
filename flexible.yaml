@@ -13,7 +13,7 @@ env:
   goal_conditioning: yes
   normalize_kwarg: true
   num_parallel_workers: 30
-  reward_scale: 1.0
+  reward_scale: 2.0
   goal_radius: 0.4
   infinite_tasks: yes
 
