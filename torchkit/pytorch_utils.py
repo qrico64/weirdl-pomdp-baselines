@@ -174,3 +174,7 @@ def print_cyan(*args):
     args_str = ' '.join([str(arg) for arg in args])
     print(f"\033[96m{args_str}\033[0m")
 
+def print_orange(*args):
+    args_str = ' '.join([str(arg) for arg in args])
+    print(f"\033[38;5;208m{args_str}\033[0m")
+

@@ -297,7 +297,8 @@ def log(*args, level=INFO):
     """
     Write the sequence of args, with no separators, to the console and output files (if you've configured an output file).
     """
-    Logger.CURRENT.log(*args, level=level)
+    args_str = ' '.join([str(arg) for arg in args])
+    Logger.CURRENT.log(f"[{str(datetime.datetime.now())}] {args_str}", level=level)
 
 def log_green(*args, level=INFO):
     log("\033[92m", *args, "\033[0m", level=level)
@@ -307,6 +308,9 @@ def log_yellow(*args, level=INFO):
 
 def log_cyan(*args, level=INFO):
     log("\033[96m", *args, "\033[0m", level=level)
+
+def log_orange(*args, level=INFO): # nominal stuff
+    log("\033[38;5;208m", *args, "\033[0m", level=level)
 
 
 def debug(*args):
