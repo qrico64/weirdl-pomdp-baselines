@@ -41,15 +41,13 @@ def make_parallel_env(env_id, episodes_per_task, num_workers, seed=None, oracle=
     def make_single_env(rank):
         """Factory function to create a single environment for a worker."""
         def _init():
-            env = gym.make(env_id, **kwargs)
             env_seed = seed + rank if seed is not None else None
-            if env_seed is not None:
-                env.seed(env_seed)
-                env.action_space.np_random.seed(env_seed)
-            env = VariBadWrapper(
-                env=env,
+            env = make_env(
+                env_id=env_id,
                 episodes_per_task=episodes_per_task,
+                seed=env_seed,
                 oracle=oracle,
+                **kwargs,
             )
             return env
         return _init

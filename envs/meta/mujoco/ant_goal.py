@@ -45,7 +45,8 @@ class AntGoalEnv(MultitaskAntEnv):
         self.reward_scale = reward_scale
         self.goal_radius = goal_radius
 
-        logger.log("\n****** Creating AntDir Environment ******")
+        logger.log()
+        logger.log("****** Creating AntGoal Environment ******")
         logger.log(f"num_train_tasks: {self.num_train_tasks}")
         logger.log(f"num_eval_tasks: {self.num_eval_tasks}")
         logger.log(f"task_mode: {self.task_mode}")
@@ -56,7 +57,8 @@ class AntGoalEnv(MultitaskAntEnv):
         logger.log(f"normalize_kwarg: {self.normalize_kwarg}")
         logger.log(f"reward_scale: {self.reward_scale}")
         logger.log(f"goal_radius: {self.goal_radius}")
-        logger.log("****** Created AntDir Environment ******\n")
+        logger.log("****** Created AntGoal Environment ******")
+        logger.log()
 
         super(AntGoalEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
     
@@ -162,7 +164,9 @@ class AntGoalEnv(MultitaskAntEnv):
         return self.tasks
 
     def train_task_distribution(self):
-        if self.task_mode == "circle":
+        if self.infinite_tasks != "yes":
+            return self.goals[np.random.randint(len(self.goals))]
+        elif self.task_mode == "circle":
             return np.random.uniform(0, 2 * np.pi)
         elif self.task_mode == "circle_down_up":
             return np.random.uniform(np.pi, 2 * np.pi)
@@ -189,11 +193,8 @@ class AntGoalEnv(MultitaskAntEnv):
                 assert goal in self.goals
             self._goal = goal
             self._task = {"goal": goal}
-        elif self.infinite_tasks == "yes":
-            self._goal = self.train_task_distribution()
-            self._task = {"goal": self._goal}
         else:
-            self._goal = self.goals[np.random.randint(len(self.goals))]
+            self._goal = self.train_task_distribution()
             self._task = {"goal": self._goal}
 
         if self.goal_noise_type == "normal":

@@ -158,6 +158,9 @@ def tensor(*args, **kwargs):
 def round_tensor(tensor, n_digits):
     return (tensor * 10 ** n_digits).round() / (10 ** n_digits)
 
+def cat(*args, **kwargs):
+    return torch.cat(*args, **kwargs).to(device)
+
 def triu(*args, **kwargs):
     return torch.triu(*args, **kwargs).to(device)
 

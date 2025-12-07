@@ -51,6 +51,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         max_len=None,
         feature_extractor_type = 'separate',
         combined_embedding_size: int = None,
+        nominal_embedding_size: int = 0,
+        num_trajectories: int = 2,
         **kwargs
     ):
         super().__init__()
@@ -77,6 +79,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             image_encoder=image_encoder_fn(),  # separate weight
             feature_extractor_type=feature_extractor_type,
             combined_embedding_size=combined_embedding_size,
+            nominal_embedding_size=nominal_embedding_size,
+            num_trajectories=num_trajectories,
         )
         self.critic_optimizer = Adam(self.critic.parameters(), lr=lr)
         # target networks
@@ -97,6 +101,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             image_encoder=image_encoder_fn(),  # separate weight
             feature_extractor_type=feature_extractor_type,
             combined_embedding_size=combined_embedding_size,
+            nominal_embedding_size=nominal_embedding_size,
+            num_trajectories=num_trajectories,
         )
         self.actor_optimizer = Adam(self.actor.parameters(), lr=lr)
         # target networks
@@ -115,6 +121,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         lengths,
         deterministic=False,
         return_log_prob=False,
+        nominals=None,
     ):
         current_action_tuple = self.actor.act(
             prev_actions=prev_actions,
@@ -123,11 +130,12 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             lengths=lengths,
             deterministic=deterministic,
             return_log_prob=return_log_prob,
+            nominals=nominals,
         )
 
         return current_action_tuple
 
-    def forward(self, actions, rewards, observs, dones, masks):
+    def forward(self, actions, rewards, observs, dones, masks, nominals = None):
         """
         For actions a, rewards r, observs o, dones d: (T+1, B, dim)
                 where for each t in [0, T], take action a[t], then receive reward r[t], done d[t], and next obs o[t]
@@ -143,6 +151,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             == dones.dim()
             == observs.dim()
             == masks.dim()
+            == nominals.dim()
             == 3
         )
         assert (
@@ -150,6 +159,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             == rewards.shape[0]
             == dones.shape[0]
             == observs.shape[0]
+            == nominals.shape[0]
             == masks.shape[0] + 1
         )
         num_valid = torch.clamp(masks.sum(), min=1.0)  # as denominator of loss
@@ -168,6 +178,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             rewards=rewards,
             dones=dones,
             gamma=self.gamma,
+            nominals=nominals,
         )
 
         # masked Bellman error: masks (T,B,1) ignore the invalid error
@@ -193,6 +204,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             observs=observs,
             actions=actions,
             rewards=rewards,
+            nominals=nominals,
         )
         # masked policy_loss
         policy_loss = (policy_loss * masks).sum() / num_valid
@@ -239,6 +251,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
     def update(self, batch):
         # all are 3D tensor (T,B,dim)
         actions, rewards, dones = batch["act"], batch["rew"], batch["term"]
+        nominals = batch["nominals"].to(dtype=torch.int64)
         _, batch_size, _ = actions.shape
         if not self.algo.continuous_action:
             # for discrete action space, convert to one-hot vectors
@@ -260,5 +273,6 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         dones = torch.cat(
             (ptu.zeros((1, batch_size, 1)).float(), dones), dim=0
         )  # (T+1, B, dim)
+        nominals = torch.cat((nominals, ptu.zeros((1, batch_size, 1)).to(dtype=nominals.dtype)), dim=0)
 
-        return self.forward(actions, rewards, observs, dones, masks)
+        return self.forward(actions, rewards, observs, dones, masks, nominals=nominals)

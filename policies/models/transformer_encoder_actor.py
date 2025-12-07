@@ -25,8 +25,10 @@ class Actor_TransformerEncoder(nn.Module):
         rnn_num_layers,
         max_len, # Maximum sequence length
         image_encoder=None,
-        feature_extractor_type: Literal['separate', 'combined1'] = 'separate',
+        feature_extractor_type: Literal['separate', 'combined1', 'combined2'] = 'separate',
         combined_embedding_size: int = None,
+        nominal_embedding_size: int = 0,
+        num_trajectories: int = 2,
         **kwargs
     ):
         assert max_len is not None
@@ -40,6 +42,8 @@ class Actor_TransformerEncoder(nn.Module):
         self.reward_embedding_size = reward_embedding_size
         self.policy_layers = policy_layers
         self.max_len = max_len
+        self.nominal_embedding_size = nominal_embedding_size
+        self.num_trajectories = num_trajectories
 
         ### Build Model
         ## 1. embed action, state, reward (Feed-forward layers first)
@@ -53,34 +57,40 @@ class Actor_TransformerEncoder(nn.Module):
             assert observ_embedding_size == 0
             observ_embedding_size = self.image_encoder.embed_size  # reset it
 
-        logger.log(f"\n****** Creating actor transformer ******")
+        logger.log()
+        logger.log(f"****** Creating actor transformer ******")
+        logger.log(f"num_trajectories = {self.num_trajectories}")
         self.feature_extractor_type = feature_extractor_type
+
+        if self.nominal_embedding_size > 0:
+            self.nominal_embedder = nn.Embedding(self.num_trajectories, self.nominal_embedding_size)
+
         if self.feature_extractor_type == 'separate':
             self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
             self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
             assert self.observ_embedding_size == self.action_embedding_size == self.reward_embedding_size
-            self.hidden_size = self.observ_embedding_size
+            self.hidden_size = self.observ_embedding_size + self.nominal_embedding_size
             self.max_context_len = max_len * 3 + 4
-            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size})")
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {nominal_embedding_size}, {action_embedding_size} + {nominal_embedding_size}, {reward_embedding_size} + {nominal_embedding_size})")
         elif self.feature_extractor_type == 'combined1':
             self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
             self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
             assert isinstance(combined_embedding_size, int)
             self.combined_embedding_size = combined_embedding_size
             self.combined_embedder = utl.FeatureExtractor(
-                self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size,
+                self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size + self.nominal_embedding_size,
                 self.combined_embedding_size,
                 F.relu,
             )
             self.hidden_size = self.combined_embedding_size
             self.max_context_len = max_len + 1
-            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size}) -> ({self.combined_embedding_size})")
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size}, {action_embedding_size}, {reward_embedding_size}, {nominal_embedding_size}) -> ({self.combined_embedding_size})")
         elif self.feature_extractor_type == "combined2":
             self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
             self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
-            self.hidden_size = self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size
+            self.hidden_size = self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size + self.nominal_embedding_size
             self.max_context_len = max_len + 1
-            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {action_embedding_size} + {reward_embedding_size} = {self.hidden_size})")
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {action_embedding_size} + {reward_embedding_size} + {nominal_embedding_size} = {self.hidden_size})")
         else:
             raise NotImplementedError(f"{self.feature_extractor_type}")
 
@@ -123,21 +133,40 @@ class Actor_TransformerEncoder(nn.Module):
         else:  # pixel obs
             return self.image_encoder(observs)
 
-    def get_hidden_states(self, obs, prev_actions, rewards) -> torch.Tensor:
-        # T, N, _ = rewards.shape
+    def get_hidden_states(self, obs, prev_actions, rewards, nominals) -> torch.Tensor:
+        T, N, _ = rewards.shape
         # assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
         # assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
         # assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
         obs_encs = self._get_obs_embedding(obs)
         action_encs = self.action_embedder(prev_actions)
         reward_encs = self.reward_embedder(rewards)
+
+        if self.nominal_embedding_size > 0:
+            # assert nominals is not None
+            # assert nominals.dtype == torch.int64, f"{nominals.dtype}"
+            if nominals.dim() == 3:
+                nominals = nominals.squeeze(-1)
+            nominal_encs = self.nominal_embedder(nominals)
+            # assert nominal_encs.shape == (T, N, self.nominal_embedding_size), f"{nominal_encs.shape} != {(T, N, self.nominal_embedding_size)}"
+        
         if self.feature_extractor_type == 'separate':
+            if self.nominal_embedding_size > 0:
+                obs_encs = torch.cat([obs_encs, nominal_encs], dim=-1)
+                reward_encs = torch.cat([reward_encs, nominal_encs], dim=-1)
+                action_encs = torch.cat([action_encs, nominal_encs], dim=-1)
             context = torch.stack([action_encs, reward_encs, obs_encs], dim=1).flatten(0, 1)
         elif self.feature_extractor_type == 'combined1':
-            concat_encs = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
+            if self.nominal_embedding_size > 0:
+                concat_encs = torch.cat([action_encs, reward_encs, obs_encs, nominal_encs], dim=-1)
+            else:
+                concat_encs = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
             context = self.combined_embedder(concat_encs)
         elif self.feature_extractor_type == 'combined2':
-            context = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
+            if self.nominal_embedding_size > 0:
+                context = torch.cat([action_encs, reward_encs, obs_encs, nominal_encs], dim=-1)
+            else:
+                context = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
         else:
             raise NotImplementedError()
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
@@ -145,7 +174,7 @@ class Actor_TransformerEncoder(nn.Module):
 
         return context  # (T * 3, N, self.hidden_size)
 
-    def forward(self, prev_actions, rewards, observs, return_log_prob:bool=False):
+    def forward(self, prev_actions, rewards, observs, return_log_prob:bool=False, nominals = None):
         """
         For prev_actions a, rewards r, observs o: (T+1, B, dim)
                 a[t] -> r[t], o[t]
@@ -154,8 +183,10 @@ class Actor_TransformerEncoder(nn.Module):
 
         """
         obs = observs
+        if nominals.dim() == 3:
+            nominals = nominals.squeeze(-1)
         
-        context = self.get_hidden_states(obs, prev_actions, rewards)
+        context = self.get_hidden_states(obs, prev_actions, rewards, nominals)
         T, N, _ = context.shape
         # assert context.shape == (T, N, self.hidden_size)
 
@@ -193,12 +224,13 @@ class Actor_TransformerEncoder(nn.Module):
         lengths,
         deterministic=False,
         return_log_prob=False,
+        nominals = None,
     ):
         # assert lengths.dtype == torch.int64
         # t0 = time.perf_counter_ns()
         # assert T == lengths.max(), f"{T} != {lengths.max()}"
 
-        context = self.get_hidden_states(obs, prev_actions, rewards)
+        context = self.get_hidden_states(obs, prev_actions, rewards, nominals)
         T, N, _ = context.shape
         # self.stats[0].append(time.perf_counter_ns() - t0)
         # t0 = time.perf_counter_ns()
@@ -213,7 +245,6 @@ class Actor_TransformerEncoder(nn.Module):
         final_embed = decoded[obs_embed_idx, torch.arange(N), :]
         # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
 
-        # 4. Actor head, generate action tuple
         action_tuple = self.algo.select_action(
             actor=self.policy,
             observ=final_embed,

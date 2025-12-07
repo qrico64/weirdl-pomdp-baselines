@@ -92,6 +92,7 @@ class SAC(RLAlgorithmBase):
         dones,
         gamma,
         next_observs=None,  # used in markov_critic
+        nominals=None,
     ):
         T1, B, _ = rewards.shape
         # Q^tar(h(t+1), pi(h(t+1))) + H[pi(h(t+1))]
@@ -102,6 +103,7 @@ class SAC(RLAlgorithmBase):
                     prev_actions=actions,
                     rewards=rewards,
                     observs=observs,
+                    nominals=nominals,
                 )
                 assert new_actions.shape == actions.shape
             elif markov_actor:
@@ -114,6 +116,7 @@ class SAC(RLAlgorithmBase):
                     prev_actions=actions,
                     rewards=rewards,
                     observs=next_observs if markov_critic else observs,
+                    nominals=nominals,
                 )
 
             if markov_critic:  # (B, 1)
@@ -125,6 +128,7 @@ class SAC(RLAlgorithmBase):
                     rewards=rewards,
                     observs=observs,
                     current_actions=new_actions,
+                    nominals=nominals,
                 )  # (T+1, B, 1)
 
             min_next_q_target = torch.min(next_q1, next_q2)
@@ -145,6 +149,7 @@ class SAC(RLAlgorithmBase):
                 rewards=rewards,
                 observs=observs,
                 current_actions=actions[1:],
+                nominals=nominals,
             )  # (T, B, 1)
 
         return (q1_pred, q2_pred), q_target
@@ -160,12 +165,13 @@ class SAC(RLAlgorithmBase):
         observs,
         actions=None,
         rewards=None,
+        nominals=None,
     ):
         if markov_actor:
             new_actions, log_probs = self.forward_actor(actor, observs)
         else:
             new_actions, log_probs = actor(
-                prev_actions=actions, rewards=rewards, observs=observs
+                prev_actions=actions, rewards=rewards, observs=observs, nominals=nominals,
             )  # (T+1, B, A)
 
         if markov_critic:
@@ -177,6 +183,7 @@ class SAC(RLAlgorithmBase):
                 rewards=rewards,
                 observs=observs,
                 current_actions=new_actions,
+                nominals=nominals,
             )  # (T+1, B, 1)
         min_q_new_actions = torch.min(q1, q2)  # (T+1,B,1)
 

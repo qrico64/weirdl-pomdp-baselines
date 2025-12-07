@@ -10,7 +10,7 @@ env:
   num_eval_tasks: 20
   task_mode: circle
   reward_conditioning: no
-  goal_conditioning: yes
+  goal_conditioning: no
   normalize_kwarg: true
   num_parallel_workers: 30
   reward_scale: 2.0
@@ -36,6 +36,9 @@ train:
   sampled_seq_len: -1 # -1 is all, or positive integer
   sample_weight_baseline: 0.0
 
+  use_nominals: true
+  nominal_model_config_file: /mmfs1/gscratch/weirdlab/qirico/Meta-Learning-25-10-1/weirdl-pomdp-baselines-cp38/experiments/dec4/dec4_antgoalposlinear_circle_3layers_combined_reward_x2_3/variant_3872_31586579.yml
+
 eval:
   eval_stochastic: false # also eval stochastic policy
   log_interval: 8 # num of iters
@@ -44,13 +47,13 @@ eval:
 
 policy:
   seq_model: transformer # [lstm, gru]
-  feature_extractor_type: combined1
+  feature_extractor_type: combined2
   algo_name: sac # [td3, sac]
 
   action_embedding_size: 128
   observ_embedding_size: 128
   reward_embedding_size: 128
-  combined_embedding_size: 256
+  nominal_embedding_size: 16
   rnn_num_layers: 3
 
   dqn_layers: [256, 256]
