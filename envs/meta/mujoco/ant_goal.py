@@ -45,6 +45,8 @@ class AntGoalEnv(MultitaskAntEnv):
         self.reward_scale = reward_scale
         self.goal_radius = goal_radius
 
+        self.return_obs_type = None
+
         logger.log()
         logger.log("****** Creating AntGoal Environment ******")
         logger.log(f"num_train_tasks: {self.num_train_tasks}")
@@ -62,6 +64,9 @@ class AntGoalEnv(MultitaskAntEnv):
 
         super(AntGoalEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
     
+    def set_return_obs_type(self, return_obs_type):
+        self.return_obs_type = return_obs_type
+    
     def reset(self, **kwargs):
         obs = super(AntGoalEnv, self).reset(**kwargs)
         return self._get_obs()
@@ -71,6 +76,7 @@ class AntGoalEnv(MultitaskAntEnv):
 
         direct = np.array([np.cos(self._goal), np.sin(self._goal)])
 
+        assert not np.any(np.isnan(action)), f"{action}"
         self.do_simulation(action, self.frame_skip)
         torso_xyz_after = np.array(self.get_body_com("torso"))
         torso_velocity = torso_xyz_after - torso_xyz_before
@@ -99,31 +105,30 @@ class AntGoalEnv(MultitaskAntEnv):
             ),
         )
 
-    def _get_obs(self, reward=0.0):
-        obs = super(AntGoalEnv, self)._get_obs()
-
+    def _append_obs_raw(self, obs, reward=0.0, return_obs_type=None):
+        obs = np.copy(obs)
         goal: float
-        if self.goal_conditioning == "yes":
+        if return_obs_type == "yes":
             goal = self._goal
             if self.normalize_kwarg:
                 goal = helpers.normalize_angle_to_pi_pi(goal)
-        elif self.goal_conditioning == "no":
+        elif return_obs_type == "no":
             goal = None
-        elif self.goal_conditioning == "fixed_noise":
+        elif return_obs_type == "fixed_noise":
             goal = self._goal + self._goal_noise
             if self.normalize_kwarg:
                 goal = helpers.normalize_angle_to_pi_pi(goal)
             obs = np.concatenate([obs, np.array([goal])], axis=0)
-        elif self.goal_conditioning == "yes_relative":
+        elif return_obs_type == "yes_relative":
             self_orientation = self.get_torso_orientation()
             assert self.normalize_kwarg
             goal = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation)
-        elif self.goal_conditioning == "yes_relative_noise":
+        elif return_obs_type == "yes_relative_noise":
             self_orientation = self.get_torso_orientation()
             assert self.normalize_kwarg
             goal = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation + self._goal_noise)
         else:
-            raise NotImplementedError(f"Unidentified goal conditioning: {self.goal_conditioning}")
+            raise NotImplementedError(f"Unidentified goal conditioning: {return_obs_type}")
         if goal is not None:
             goal_pos = np.array([np.cos(goal), np.sin(goal)])
             obs = np.concatenate([obs, goal_pos], axis=0)
@@ -131,7 +136,20 @@ class AntGoalEnv(MultitaskAntEnv):
         if self.reward_conditioning == "yes":
             obs = np.concatenate([obs, np.array([reward])], axis=0)
         
+        assert not np.any(np.isnan(obs))
+        
         return obs
+
+    def _get_obs(self, reward=0.0):
+        obs = super(AntGoalEnv, self)._get_obs()
+        regular_obs = self._append_obs_raw(obs, reward=reward, return_obs_type=self.goal_conditioning)
+
+        if self.return_obs_type is not None:
+            self.obs_return = self._append_obs_raw(obs, reward=reward, return_obs_type=self.return_obs_type)
+        else:
+            self.obs_return = None
+        
+        return regular_obs
 
     def sample_tasks(self, num_tasks):
         assert self.task_mode is not None, f"{self.task_mode}"
@@ -240,6 +258,10 @@ class AntGoalEnv(MultitaskAntEnv):
             return True
         else:
             return False
+        
+    def obs_dim(self, return_obs_type=None):
+        assert return_obs_type is not None
+        return 28 + (2 if return_obs_type != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
 
     def annotation(self) -> str:
         info = {

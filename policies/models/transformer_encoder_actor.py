@@ -232,6 +232,7 @@ class Actor_TransformerEncoder(nn.Module):
 
         context = self.get_hidden_states(obs, prev_actions, rewards, nominals)
         T, N, _ = context.shape
+        # Rico: Confirmed healthy 1 :D
         # self.stats[0].append(time.perf_counter_ns() - t0)
         # t0 = time.perf_counter_ns()
         # assert context.shape == (T * 3, N, self.hidden_size)

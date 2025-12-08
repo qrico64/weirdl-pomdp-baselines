@@ -92,18 +92,25 @@ class VariBadWrapper(gym.Wrapper):
     def reset(self, task=None, **kwargs):
 
         # reset task -- this sets goal and state -- sets self.env._goal and self.env._state
-        self.env.reset_task(task, **kwargs)
+        reset_keys = set(['return_obs_type'])
+        reset_task_kwargs = {k: kwargs[k] for k in kwargs.keys() - reset_keys}
+        self.env.reset_task(task, **reset_task_kwargs)
 
         self.episode_count = 0
         self.step_count_bamdp = 0
 
         # normal reset
+        return_obs_type = kwargs.get('return_obs_type', None)
+        self.env.unwrapped.set_return_obs_type(return_obs_type)
         try:
             state = self.env.reset()
         except AttributeError:
             state = self.env.unwrapped.reset()
 
         self.done_mdp = False
+
+        if return_obs_type is not None:
+            return self._get_obs(state), self._get_obs(np.copy(self.env.unwrapped.obs_return))
 
         return self._get_obs(state)
 
@@ -119,7 +126,7 @@ class VariBadWrapper(gym.Wrapper):
 
         return self._get_obs(state)
 
-    def step(self, action):
+    def step(self, action, **kwargs):
 
         if self._normalize_actions:  # from [-1, 1] to [lb, ub]
             action = np.clip(action, -1, 1)  # first clip into [-1, 1]
@@ -128,10 +135,16 @@ class VariBadWrapper(gym.Wrapper):
             action = lb + (action + 1.0) * 0.5 * (ub - lb)
             action = np.clip(action, lb, ub)
 
+        return_obs_type = kwargs.get('return_obs_type', None)
+        self.env.unwrapped.set_return_obs_type(return_obs_type)
+
         # do normal environment step in MDP
         state, reward, self.done_mdp, info = self.env.step(action)
 
         info["done_mdp"] = self.done_mdp
+        info["obs_return"] = self._get_obs(self.env.unwrapped.obs_return) if return_obs_type is not None else None
+        if return_obs_type is not None:
+            assert self.env.unwrapped.obs_return is not None
         state = self._get_obs(state)
 
         self.step_count_bamdp += 1

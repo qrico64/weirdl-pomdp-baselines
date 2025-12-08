@@ -683,7 +683,8 @@ class Learner:
 
     @torch.no_grad()
     def collect_rollouts_parallel(self, num_rollouts, random_actions=False, parallel_env: ParallelEnvManager = None,
-                                  is_artificial_rollout: bool = False, fix_goals: list = None):
+                                  is_artificial_rollout: bool = False, fix_goals: list = None,
+                                  return_obs_type: str = None):
         """
         Collect num_rollouts of trajectories in parallel across multiple environment workers.
 
@@ -698,7 +699,7 @@ class Learner:
         :return: Number of environment steps collected
         """
         if parallel_env is None:
-            return self.collect_rollouts(num_rollouts, random_actions)
+            parallel_env = self.train_env_parallel
         
         if is_artificial_rollout:
             assert fix_goals is not None
@@ -716,6 +717,7 @@ class Learner:
                 parallel_env=self.nominal_model.train_env_parallel,
                 is_artificial_rollout=True,
                 fix_goals=fix_goals,
+                return_obs_type=self.train_env.unwrapped.goal_conditioning
             )
 
         # Sync rollout_agent with current agent weights to get a consistent snapshot
@@ -742,6 +744,11 @@ class Learner:
             'cur_nominal_index': np.zeros((num_workers, ), dtype=np.int64),
             'list_len': np.zeros((num_workers, ), dtype=np.int64),
         }
+        if return_obs_type is not None:
+            obs_return_list_dim = self.train_env.unwrapped.obs_dim(return_obs_type=return_obs_type)
+            worker_buffers['obs_return_list'] = np.zeros((num_workers, self.max_trajectory_len+1, obs_return_list_dim), dtype=np.float32)
+            assert not ptu.isnan(worker_buffers['obs_return_list'])
+        
         for worker_id in range(num_workers):
             if worker_rollout_counts[worker_id] > 0:
                 worker_states[worker_id] = {
@@ -770,12 +777,14 @@ class Learner:
             else:
                 task = None
             worker_states[worker_id]['task'] = task
-            parallel_env.remotes[worker_id].send(('reset', {'task': task}))
+            parallel_env.remotes[worker_id].send(('reset', {'task': task, 'return_obs_type': return_obs_type}))
 
         # Collect ALL reset responses (workers reset in parallel)
         for worker_id in worker_states.keys():
             msg_type, obs_np = parallel_env.remotes[worker_id].recv()
             assert msg_type == 'obs'
+            if return_obs_type is not None:
+                obs_np, obs_return_np = obs_np
 
             obs = ptu.from_numpy(obs_np).reshape(1, obs_np.shape[-1])
             worker_states[worker_id]['obs'] = obs
@@ -787,6 +796,7 @@ class Learner:
                 worker_buffers['cur_nominal_index'][worker_id] = 1
 
             if self.use_nominals:
+                assert return_obs_type is None, f"{return_obs_type}"
                 cur_fix_goals_i = worker_states[worker_id]['fix_goals_i']
                 nominal_trajectory = nominals[cur_fix_goals_i]
                 assert nominal_trajectory['goal'] == worker_states[worker_id]['task']
@@ -806,6 +816,8 @@ class Learner:
                 worker_states[worker_id]['reward'] = reward
                 worker_states[worker_id]['internal_state'] = internal_state
                 worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
+                if return_obs_type is not None:
+                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = obs_return_np
                 worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
                 worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
@@ -815,6 +827,9 @@ class Learner:
             if self.agent_arch == AGENT_ARCHS.Transformer:
                 action, reward = self.rollout_agent.get_initial_info()
                 worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
+                if return_obs_type is not None:
+                    assert not ptu.isnan(obs_return_np)
+                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = obs_return_np
                 worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
                 worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
@@ -926,7 +941,7 @@ class Learner:
                     action_np = np.argmax(action_np)
 
                 # Non-blocking send: returns immediately, worker starts step() in parallel
-                parallel_env.remotes[worker_id].send(('step', {'action': action_np}))
+                parallel_env.remotes[worker_id].send(('step', {'action': action_np, 'return_obs_type': return_obs_type}))
 
             # PHASE 3: Collect results from ALL active workers (blocking)
             # Workers have been computing in parallel, now we collect their results
@@ -947,6 +962,10 @@ class Learner:
             for worker_id, (next_obs, reward, done, info, action) in worker_transitions.items():
                 state = worker_states[worker_id]
                 obs = state['obs']
+                assert not ptu.isnan(next_obs)
+                if return_obs_type is not None:
+                    next_obs_return_np = info['obs_return']
+                    assert not ptu.isnan(next_obs_return_np)
 
                 # Clip reward if needed
                 if self.reward_clip and self.env_type == "atari":
@@ -993,6 +1012,10 @@ class Learner:
                     worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                     worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
                     worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                    if return_obs_type is not None:
+                        assert next_obs_return_np is not None
+                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = next_obs_return_np
+                        assert not ptu.isnan(next_obs_return_np)
                     worker_buffers['list_len'][worker_id] += 1
                 else:  # Memory-based agent
                     worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
@@ -1000,6 +1023,10 @@ class Learner:
                     worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                     worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
                     worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                    if return_obs_type is not None:
+                        assert next_obs_return_np is not None
+                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = next_obs_return_np
+                        assert not ptu.isnan(next_obs_return_np)
                     worker_buffers['list_len'][worker_id] += 1
 
                 if (not is_artificial_rollout) and info['done_mdp'] == True:
@@ -1032,8 +1059,11 @@ class Learner:
                             )
                         else:
                             assert self.act_continuous # for sake of rigor
+                            assert not ptu.isnan(worker_buffers['obs_list'])
+                            if return_obs_type is not None:
+                                assert not ptu.isnan(worker_buffers['obs_return_list'])
                             rollout_dict = dict(
-                                observations = worker_buffers['obs_list'][worker_id, : worker_buffers['list_len'][worker_id]],
+                                observations = worker_buffers['obs_list' if return_obs_type is None else 'obs_return_list'][worker_id, : worker_buffers['list_len'][worker_id]],
                                 actions = worker_buffers['act_list'][worker_id, : worker_buffers['list_len'][worker_id]],
                                 rewards = worker_buffers['rew_list'][worker_id, : worker_buffers['list_len'][worker_id]],
                                 terminals = worker_buffers['term_list'][worker_id, : worker_buffers['list_len'][worker_id]],
@@ -1184,6 +1214,7 @@ class Learner:
                 parallel_env=self.nominal_model.train_env_parallel,
                 is_artificial_rollout=True,
                 fix_goals=tasks,
+                return_obs_type=self.train_env.unwrapped.goal_conditioning,
             )
 
         goals = set()
@@ -1210,6 +1241,7 @@ class Learner:
 
             if self.use_nominals:
                 nominal_trajectory = nominal_trajectories[task_idx]
+                assert not ptu.isnan(nominal_trajectory['observations'])
                 obss += list(ptu.from_numpy(nominal_trajectory['observations']).unsqueeze(1))
                 actions += list(ptu.from_numpy(nominal_trajectory['actions']).unsqueeze(1))
                 rewards += list(ptu.from_numpy(nominal_trajectory['rewards']).unsqueeze(1))
@@ -1251,6 +1283,7 @@ class Learner:
                         )
                     elif self.agent_arch == AGENT_ARCHS.Transformer:
                         batch_obs = ptu.cat(obss, dim=0).unsqueeze(dim=1)
+                        assert not ptu.isnan(batch_obs)
                         batch_prev_actions = ptu.cat(actions, dim=0).unsqueeze(dim=1)
                         batch_rewards = ptu.cat(rewards, dim=0).unsqueeze(dim=1)
                         batch_nominals = ptu.tensor(nominals).unsqueeze(dim=1).to(dtype=torch.int64)
@@ -1270,6 +1303,7 @@ class Learner:
                         )
 
                     # observe reward and next obs
+                    assert not ptu.isnan(action)
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )

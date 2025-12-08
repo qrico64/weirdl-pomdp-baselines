@@ -206,6 +206,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             rewards=rewards,
             nominals=nominals,
         )
+        # Rico: Confirmed healthy 2 :D
         # masked policy_loss
         policy_loss = (policy_loss * masks).sum() / num_valid
 

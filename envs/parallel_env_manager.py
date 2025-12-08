@@ -52,17 +52,12 @@ class EnvWorker(Process):
 
                 if cmd == 'reset':
                     # data contains task information (can be None)
-                    task = data.get('task', None)
-                    if task is not None:
-                        obs = self.env.reset(task=task)
-                    else:
-                        obs = self.env.reset()
+                    obs = self.env.reset(**data)
                     self.remote.send(('obs', obs))
 
                 elif cmd == 'step':
                     # data contains action
-                    action = data['action']
-                    obs, reward, done, info = self.env.step(action)
+                    obs, reward, done, info = self.env.step(**data)
 
                     # Check if environment has is_goal_state method (for meta-learning envs)
                     if hasattr(self.env, 'unwrapped') and hasattr(self.env.unwrapped, 'is_goal_state'):
@@ -183,7 +178,7 @@ class ParallelEnvManager:
         except:
             pass
 
-    def reset(self, env_idx: int = 0, task: Optional[int] = None) -> np.ndarray:
+    def reset(self, env_idx: int = 0, **kwargs) -> np.ndarray:
         """
         Reset a specific environment.
 
@@ -197,7 +192,8 @@ class ParallelEnvManager:
         if env_idx >= self.num_envs:
             raise ValueError(f"env_idx {env_idx} out of range [0, {self.num_envs})")
 
-        self.remotes[env_idx].send(('reset', {'task': task}))
+        assert isinstance(kwargs, dict)
+        self.remotes[env_idx].send(('reset', kwargs))
         msg_type, obs = self.remotes[env_idx].recv()
         assert msg_type == 'obs'
         return obs
