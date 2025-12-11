@@ -326,6 +326,8 @@ class Learner:
         buffer_type=None,
         use_nominals: bool = False,
         nominal_model_config_file: str = None,
+        use_residuals: bool = False,
+        base_model_config_file: str = None,
         **kwargs
     ):
         self.use_nominals = use_nominals
@@ -347,6 +349,17 @@ class Learner:
             for i in range(len(self.goals)):
                 self.nominal_trajectories[self.goals[i]] = nominal_rollouts[i]
             logger.log_orange(f"Nominals used, with max_trajectory_len stays at {self.max_trajectory_len}.")
+
+        self.use_residuals = use_residuals
+        self.base_model_config_file = base_model_config_file
+        if self.use_residuals:
+            assert self.base_model_config_file is not None
+            assert os.path.isabs(self.base_model_config_file), f"Must be absolute: {self.base_model_config_file}"
+            assert os.path.exists(self.base_model_config_file), f"Must exist: {self.base_model_config_file}"
+            self.base_model = pull_model(self.base_model_config_file, "latest", {}, True)
+            assert not self.base_model.use_residuals
+        else:
+            self.base_model = None
 
         if num_updates_per_iter is None:
             num_updates_per_iter = 1.0
@@ -435,9 +448,9 @@ class Learner:
         self._start_training()
 
         # Perform initial evaluation before training for debugging
-        # logger.log("Performing initial evaluation before training...")
-        # initial_perf = self.log()
-        # logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+        logger.log("Performing initial evaluation before training...")
+        initial_perf = self.log()
+        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
@@ -752,12 +765,15 @@ class Learner:
             'term_list': np.zeros((num_workers, self.max_trajectory_len+1, 1), dtype=np.bool8),
             'is_nominals': np.zeros((num_workers, self.max_trajectory_len+1, 1), dtype=np.int64),
             'cur_nominal_index': np.zeros((num_workers, ), dtype=np.int64),
+            'cur_base_action': np.zeros((num_workers, self.act_dim), dtype=np.int64), # just an intermediate state, unnecessary.
             'list_len': np.zeros((num_workers, ), dtype=np.int64),
         }
         if return_obs_type is not None:
             obs_return_list_dim = self.train_env.unwrapped.obs_dim(return_obs_type=return_obs_type)
             worker_buffers['obs_return_list'] = np.zeros((num_workers, self.max_trajectory_len+1, obs_return_list_dim), dtype=np.float32)
-            assert not ptu.isnan(worker_buffers['obs_return_list'])
+        if self.use_residuals:
+            worker_buffers['base_act_list'] = np.zeros((num_workers, self.max_trajectory_len+1, self.act_dim), dtype=np.float32)
+            # Here, 'base_act_list' are base actions, 'act_list' are final actions, so the model's output (residual action) is their difference
         
         for worker_id in range(num_workers):
             if worker_rollout_counts[worker_id] > 0:
@@ -821,6 +837,8 @@ class Learner:
                 worker_buffers['is_nominals'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                 if return_obs_type is not None:
                     worker_buffers['obs_return_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
+                if self.use_residuals:
+                    worker_buffers['base_act_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                 worker_buffers['list_len'][worker_id] += nominal_t
                 worker_states[worker_id]['nominal_length'] = nominal_t
 
@@ -836,6 +854,8 @@ class Learner:
                 worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                 worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                if self.use_residuals:
+                    worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                 worker_buffers['list_len'][worker_id] += 1
             
             if self.agent_arch == AGENT_ARCHS.Transformer:
@@ -848,6 +868,8 @@ class Learner:
                 worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                 worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                if self.use_residuals:
+                    worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                 worker_buffers['list_len'][worker_id] += 1
 
         # act_times = [[], [], []]
@@ -920,6 +942,34 @@ class Learner:
                     batch_prev_actions = ptu.from_numpy(worker_buffers['act_list'][active_workers, :L].swapaxes(0, 1))
                     batch_rewards = ptu.from_numpy(worker_buffers['rew_list'][active_workers, :L].swapaxes(0, 1))
                     batch_nominals = ptu.from_numpy(worker_buffers['is_nominals'][active_workers, :L].swapaxes(0, 1)).to(dtype=torch.int64)
+                    
+                    base_actions = None
+                    if self.use_residuals:
+                        assert not self.base_model.use_nominals, f"{self.base_model.use_nominals}"
+                        nominal_lengths = np.argmax(worker_buffers['is_nominals'][active_workers, :, 0] != 0, axis=1)
+                        nominal_batch_lengths = worker_buffers['list_len'][active_workers] - nominal_lengths
+                        L = nominal_batch_lengths.max()
+                        nominal_batch_obs = np.zeros((len(active_workers), L, self.obs_dim), dtype=np.float32)
+                        nominal_batch_prev_actions = np.zeros((len(active_workers), L, self.act_dim), dtype=np.float32)
+                        nominal_batch_rewards = np.zeros((len(active_workers), L, 1), dtype=np.float32)
+                        nominal_batch_nominals = np.zeros((len(active_workers), L, 1), dtype=np.int64)
+                        for i in range(len(active_workers)):
+                            nominal_batch_obs[i, : nominal_batch_lengths[i], :] = worker_buffers['obs_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
+                            nominal_batch_prev_actions[i, : nominal_batch_lengths[i], :] = worker_buffers['act_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
+                            nominal_batch_rewards[i, : nominal_batch_lengths[i], :] = worker_buffers['rew_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
+                            nominal_batch_nominals[i, : nominal_batch_lengths[i], :] = worker_buffers['is_nominals'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
+
+                        base_actions, _, _, _ = self.base_model.agent.act(
+                            prev_actions=ptu.from_numpy(nominal_batch_prev_actions.swapaxes(0, 1)),
+                            obs=ptu.from_numpy(nominal_batch_obs.swapaxes(0, 1)),
+                            rewards=ptu.from_numpy(nominal_batch_rewards.swapaxes(0, 1)),
+                            lengths=ptu.from_numpy(nominal_batch_lengths).to(dtype=torch.int64),
+                            deterministic=False,
+                            nominals=ptu.from_numpy(nominal_batch_nominals.swapaxes(0, 1)).to(dtype=torch.int64),
+                        )
+                        assert base_actions.shape == (len(active_workers), self.act_dim), f"{base_actions.shape} != {(len(active_workers), self.act_dim)}"
+                        assert not ptu.isnan(base_actions)
+                        worker_buffers['cur_base_action'][active_workers, :] = ptu.get_numpy(base_actions)
                     # act_times[0].append(time.perf_counter_ns() - t1)
                     # t1 = time.perf_counter_ns()
                     batch_actions, _, _, _ = self.rollout_agent.act(
@@ -929,7 +979,10 @@ class Learner:
                         lengths=batch_lengths,
                         deterministic=False,
                         nominals=batch_nominals,
+                        base_actions=base_actions,
                     )
+                    if self.use_residuals:
+                        batch_actions += base_actions
                     # act_times[1].append(time.perf_counter_ns() - t1)
                     # t1 = time.perf_counter_ns()
                     for idx, worker_id in enumerate(active_workers):
@@ -1033,6 +1086,8 @@ class Learner:
                         assert next_obs_return_np is not None
                         worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = next_obs_return_np
                         assert not ptu.isnan(next_obs_return_np)
+                    if self.use_residuals:
+                        worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
                     worker_buffers['list_len'][worker_id] += 1
                 else:  # Memory-based agent
                     worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
@@ -1044,6 +1099,8 @@ class Learner:
                         assert next_obs_return_np is not None
                         worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = next_obs_return_np
                         assert not ptu.isnan(next_obs_return_np)
+                    if self.use_residuals:
+                        worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
                     worker_buffers['list_len'][worker_id] += 1
 
                 if (not is_artificial_rollout) and info['done_mdp'] == True:
@@ -1065,7 +1122,7 @@ class Learner:
 
                         cur_fix_goals_i = worker_states[worker_id]['fix_goals_i']
                         if not is_artificial_rollout:
-                            self.policy_storage.add_episode(
+                            episode_info = dict(
                                 observations = worker_buffers['obs_list'][worker_id, : worker_buffers['list_len'][worker_id] - 1],
                                 actions = act_buffer,
                                 rewards = worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
@@ -1073,7 +1130,11 @@ class Learner:
                                 next_observations = worker_buffers['obs_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
                                 nominals = worker_buffers['is_nominals'][worker_id, : worker_buffers['list_len'][worker_id] - 1],
                             )
+                            if self.use_residuals:
+                                episode_info['base_actions'] = worker_buffers['base_act_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]]
+                            self.policy_storage.add_episode(**episode_info)
                         else:
+                            assert not self.use_residuals
                             assert self.act_continuous # for sake of rigor
                             assert not ptu.isnan(worker_buffers['obs_list'])
                             if return_obs_type is not None:
@@ -1163,6 +1224,8 @@ class Learner:
                         worker_buffers['is_nominals'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                         if return_obs_type is not None:
                             worker_buffers['obs_return_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
+                        if self.use_residuals:
+                            worker_buffers['base_act_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                         worker_buffers['list_len'][worker_id] += nominal_t
                         worker_states[worker_id]['nominal_length'] = nominal_t
 
@@ -1176,6 +1239,8 @@ class Learner:
                         worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                         worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                         worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                        if self.use_residuals:
+                            worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                         worker_buffers['list_len'][worker_id] += 1
 
                     if self.agent_arch == AGENT_ARCHS.Transformer:
@@ -1185,12 +1250,15 @@ class Learner:
                         worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                         worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                         worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                        if self.use_residuals:
+                            worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                         worker_buffers['list_len'][worker_id] += 1
 
         # act_times_avg = np.array(act_times).mean(axis=1)
         # print(act_times_avg)
         assert fix_goals_i == num_rollouts
         (logger.log if not is_artificial_rollout else logger.log_orange)(f"Ending collection...")
+        # (logger.log if not is_artificial_rollout else logger.log_orange)(f"Traversed goals: {goals}")
         if is_artificial_rollout:
             return collected_rollouts
         # breakpoint()
@@ -1266,6 +1334,7 @@ class Learner:
             rewards = []
             nominals = []
             cur_nominal_index = 1
+            cur_nominal_length = nominal_trajectories[task_idx]['observations'].shape[0]
 
             if self.use_nominals:
                 nominal_trajectory = nominal_trajectories[task_idx]
@@ -1315,6 +1384,26 @@ class Learner:
                         batch_prev_actions = ptu.cat(actions, dim=0).unsqueeze(dim=1)
                         batch_rewards = ptu.cat(rewards, dim=0).unsqueeze(dim=1)
                         batch_nominals = ptu.tensor(nominals).unsqueeze(dim=1).to(dtype=torch.int64)
+
+                        base_actions = None
+                        if self.use_residuals:
+                            assert not self.base_model.use_nominals, f"{self.base_model.use_nominals}"
+                            nominal_batch_obs = batch_obs[cur_nominal_length:, :, :].clone().detach()
+                            nominal_batch_prev_actions = batch_prev_actions[cur_nominal_length:, :, :].clone().detach()
+                            nominal_batch_rewards = batch_rewards[cur_nominal_length:, :, :].clone().detach()
+                            nominal_batch_nominals = batch_nominals[cur_nominal_length:, :].clone().detach()
+
+                            base_actions, _, _, _ = self.base_model.agent.act(
+                                prev_actions=nominal_batch_prev_actions,
+                                obs=nominal_batch_obs,
+                                rewards=nominal_batch_rewards,
+                                lengths=ptu.FloatTensor([batch_obs.shape[0] - cur_nominal_length]).to(dtype=torch.int64),
+                                deterministic=False,
+                                nominals=nominal_batch_nominals,
+                            )
+                            assert base_actions.shape == (1, self.act_dim), f"{base_actions.shape} != {(1, self.act_dim)}"
+                            assert not ptu.isnan(base_actions)
+
                         batch_actions, _, _, _ = self.agent.act(
                             prev_actions=batch_prev_actions,
                             obs=batch_obs,
@@ -1322,7 +1411,10 @@ class Learner:
                             lengths=ptu.FloatTensor([batch_obs.shape[0]]).to(dtype=torch.int64),
                             deterministic=deterministic,
                             nominals=batch_nominals,
+                            base_actions=base_actions,
                         )
+                        if base_actions is not None:
+                            batch_actions += base_actions
                         action = batch_actions
                         assert batch_actions.shape[0] == 1
                     else:

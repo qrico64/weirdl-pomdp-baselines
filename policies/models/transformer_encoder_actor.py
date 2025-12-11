@@ -29,6 +29,7 @@ class Actor_TransformerEncoder(nn.Module):
         combined_embedding_size: int = None,
         nominal_embedding_size: int = 0,
         num_trajectories: int = 2,
+        use_residuals: bool = False,
         **kwargs
     ):
         assert max_len is not None
@@ -44,6 +45,7 @@ class Actor_TransformerEncoder(nn.Module):
         self.max_len = max_len
         self.nominal_embedding_size = nominal_embedding_size
         self.num_trajectories = num_trajectories
+        self.use_residuals = use_residuals
 
         ### Build Model
         ## 1. embed action, state, reward (Feed-forward layers first)
@@ -93,6 +95,12 @@ class Actor_TransformerEncoder(nn.Module):
             logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {action_embedding_size} + {reward_embedding_size} + {nominal_embedding_size} = {self.hidden_size})")
         else:
             raise NotImplementedError(f"{self.feature_extractor_type}")
+        
+        self.policy_mlp_input_size = self.hidden_size
+        if self.use_residuals:
+            self.base_action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.policy_mlp_input_size += self.action_embedding_size
+            logger.log(f"policy_mlp_input_size = {self.policy_mlp_input_size}")
 
         self.num_layers = rnn_num_layers
 
@@ -115,7 +123,7 @@ class Actor_TransformerEncoder(nn.Module):
 
         ## 4. build policy
         self.policy = self.algo.build_actor(
-            input_size=self.hidden_size,
+            input_size=self.policy_mlp_input_size,
             action_dim=self.action_dim,
             hidden_sizes=policy_layers,
         )
@@ -135,20 +143,20 @@ class Actor_TransformerEncoder(nn.Module):
 
     def get_hidden_states(self, obs, prev_actions, rewards, nominals) -> torch.Tensor:
         T, N, _ = rewards.shape
-        # assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
-        # assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
-        # assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
+        assert rewards.dim() == 3 and rewards.shape[2] == 1, f"{rewards.shape}"
+        assert obs.shape == (T, N, self.obs_dim), f"{obs.shape} != {(T, N, self.obs_dim)}"
+        assert prev_actions.shape == (T, N, self.action_dim), f"{prev_actions.shape} != {(T, N, self.action_dim)}"
         obs_encs = self._get_obs_embedding(obs)
         action_encs = self.action_embedder(prev_actions)
         reward_encs = self.reward_embedder(rewards)
 
         if self.nominal_embedding_size > 0:
-            # assert nominals is not None
-            # assert nominals.dtype == torch.int64, f"{nominals.dtype}"
+            assert nominals is not None
+            assert nominals.dtype == torch.int64, f"{nominals.dtype}"
             if nominals.dim() == 3:
                 nominals = nominals.squeeze(-1)
             nominal_encs = self.nominal_embedder(nominals)
-            # assert nominal_encs.shape == (T, N, self.nominal_embedding_size), f"{nominal_encs.shape} != {(T, N, self.nominal_embedding_size)}"
+            assert nominal_encs.shape == (T, N, self.nominal_embedding_size), f"{nominal_encs.shape} != {(T, N, self.nominal_embedding_size)}"
         
         if self.feature_extractor_type == 'separate':
             if self.nominal_embedding_size > 0:
@@ -169,12 +177,16 @@ class Actor_TransformerEncoder(nn.Module):
                 context = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
         else:
             raise NotImplementedError()
-        pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
+        
+        try:
+            pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
+        except Exception:
+            breakpoint()
         context += pos
 
         return context  # (T * 3, N, self.hidden_size)
 
-    def forward(self, prev_actions, rewards, observs, return_log_prob:bool=False, nominals = None):
+    def forward(self, prev_actions, rewards, observs, return_log_prob:bool=False, nominals = None, base_actions = None):
         """
         For prev_actions a, rewards r, observs o: (T+1, B, dim)
                 a[t] -> r[t], o[t]
@@ -188,7 +200,7 @@ class Actor_TransformerEncoder(nn.Module):
         
         context = self.get_hidden_states(obs, prev_actions, rewards, nominals)
         T, N, _ = context.shape
-        # assert context.shape == (T, N, self.hidden_size)
+        assert context.shape == (T, N, self.hidden_size)
 
         mask = self.mask[:T, :T]
         decoded = self.transformer(context, mask=mask)
@@ -196,6 +208,11 @@ class Actor_TransformerEncoder(nn.Module):
         obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
         obs_embeds = decoded[obs_embed_indx, :, :]
         # assert obs_embeds.shape == (T, N, self.hidden_size)
+        if self.use_residuals:
+            base_embeds = self.base_action_embedder(base_actions)
+            assert base_embeds.shape == (T, N, self.action_embedding_size)
+            obs_embeds = torch.cat([obs_embeds, base_embeds], dim=-1)
+        assert obs_embeds.shape == (T, N, self.policy_mlp_input_size)
         actions, log_probs = self.algo.forward_actor(actor=self.policy, observ=obs_embeds)
         # assert actions.shape == (T, N, prev_actions.shape[2])
         # assert log_probs.shape == (T, N, 1)
@@ -225,6 +242,7 @@ class Actor_TransformerEncoder(nn.Module):
         deterministic=False,
         return_log_prob=False,
         nominals = None,
+        base_actions = None
     ):
         # assert lengths.dtype == torch.int64
         # t0 = time.perf_counter_ns()
@@ -243,12 +261,18 @@ class Actor_TransformerEncoder(nn.Module):
         # self.stats[1].append(time.perf_counter_ns() - t0)
         # t0 = time.perf_counter_ns()
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
-        final_embed = decoded[obs_embed_idx, torch.arange(N), :]
-        # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
+        obs_embeds = decoded[obs_embed_idx, torch.arange(N), :]
+        # assert obs_embeds.shape == (N, self.hidden_size), f"{obs_embeds.shape} != {(N, self.hidden_size)}"
+        if self.use_residuals:
+            assert base_actions is not None
+            base_embeds = self.base_action_embedder(base_actions)
+            assert base_embeds.shape == (N, self.action_embedding_size)
+            obs_embeds = torch.cat([obs_embeds, base_embeds], dim=-1)
+        assert obs_embeds.shape == (N, self.policy_mlp_input_size), f"{obs_embeds.shape} != {(N, self.policy_mlp_input_size)}"
 
         action_tuple = self.algo.select_action(
             actor=self.policy,
-            observ=final_embed,
+            observ=obs_embeds,
             deterministic=deterministic,
             return_log_prob=return_log_prob,
         )

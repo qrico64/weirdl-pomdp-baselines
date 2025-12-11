@@ -93,6 +93,7 @@ class SAC(RLAlgorithmBase):
         gamma,
         next_observs=None,  # used in markov_critic
         nominals=None,
+        base_actions=None,
     ):
         T1, B, _ = rewards.shape
         # Q^tar(h(t+1), pi(h(t+1))) + H[pi(h(t+1))]
@@ -104,6 +105,7 @@ class SAC(RLAlgorithmBase):
                     rewards=rewards,
                     observs=observs,
                     nominals=nominals,
+                    base_actions=base_actions,
                 )
                 assert new_actions.shape == actions.shape
             elif markov_actor:
@@ -117,7 +119,11 @@ class SAC(RLAlgorithmBase):
                     rewards=rewards,
                     observs=next_observs if markov_critic else observs,
                     nominals=nominals,
+                    base_actions=base_actions,
                 )
+
+            if base_actions is not None:
+                new_actions += base_actions
 
             if markov_critic:  # (B, 1)
                 next_q1 = critic_target[0](next_observs, new_actions)
@@ -166,13 +172,17 @@ class SAC(RLAlgorithmBase):
         actions=None,
         rewards=None,
         nominals=None,
+        base_actions=None,
     ):
         if markov_actor:
             new_actions, log_probs = self.forward_actor(actor, observs)
         else:
             new_actions, log_probs = actor(
                 prev_actions=actions, rewards=rewards, observs=observs, nominals=nominals,
+                base_actions=base_actions,
             )  # (T+1, B, A)
+            if base_actions is not None:
+                new_actions += base_actions
 
         if markov_critic:
             q1 = critic[0](observs, new_actions)

@@ -53,6 +53,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         combined_embedding_size: int = None,
         nominal_embedding_size: int = 0,
         num_trajectories: int = 2,
+        use_residuals: bool = False,
         **kwargs
     ):
         super().__init__()
@@ -63,6 +64,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         self.tau = tau
 
         self.algo = RL_ALGORITHMS[algo_name](**kwargs[algo_name], action_dim=action_dim)
+        
+        self.use_residuals = use_residuals
 
         # Critics
         self.critic = Critic_TransformerEncoder(
@@ -103,6 +106,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             combined_embedding_size=combined_embedding_size,
             nominal_embedding_size=nominal_embedding_size,
             num_trajectories=num_trajectories,
+            use_residuals=use_residuals,
         )
         self.actor_optimizer = Adam(self.actor.parameters(), lr=lr)
         # target networks
@@ -122,6 +126,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         deterministic=False,
         return_log_prob=False,
         nominals=None,
+        base_actions=None,
     ):
         current_action_tuple = self.actor.act(
             prev_actions=prev_actions,
@@ -131,11 +136,12 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             deterministic=deterministic,
             return_log_prob=return_log_prob,
             nominals=nominals,
+            base_actions=base_actions,
         )
 
         return current_action_tuple
 
-    def forward(self, actions, rewards, observs, dones, masks, nominals = None):
+    def forward(self, actions, rewards, observs, dones, masks, nominals = None, base_actions = None):
         """
         For actions a, rewards r, observs o, dones d: (T+1, B, dim)
                 where for each t in [0, T], take action a[t], then receive reward r[t], done d[t], and next obs o[t]
@@ -179,6 +185,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             dones=dones,
             gamma=self.gamma,
             nominals=nominals,
+            base_actions=base_actions,
         )
 
         # masked Bellman error: masks (T,B,1) ignore the invalid error
@@ -205,6 +212,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             actions=actions,
             rewards=rewards,
             nominals=nominals,
+            base_actions=base_actions,
         )
         # Rico: Confirmed healthy 2 :D
         # masked policy_loss
@@ -276,4 +284,11 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         )  # (T+1, B, dim)
         nominals = torch.cat((nominals, ptu.zeros((1, batch_size, 1)).to(dtype=nominals.dtype)), dim=0)
 
-        return self.forward(actions, rewards, observs, dones, masks, nominals=nominals)
+        base_actions = None
+        if self.use_residuals:
+            base_actions = batch["base_actions"] # (T, B, act_dim)
+            base_actions = torch.cat(
+                (ptu.zeros((1, batch_size, self.action_dim)).float(), base_actions), dim=0
+            )  # (T+1, B, dim)
+
+        return self.forward(actions, rewards, observs, dones, masks, nominals=nominals, base_actions=base_actions)

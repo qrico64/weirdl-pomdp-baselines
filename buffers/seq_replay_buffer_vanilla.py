@@ -11,6 +11,7 @@ class SeqReplayBuffer:
         action_dim,
         sampled_seq_len: int,
         sample_weight_baseline: float,
+        use_residuals: bool = False,
         **kwargs
     ):
         """
@@ -55,6 +56,10 @@ class SeqReplayBuffer:
         self._valid_starts = np.zeros((max_replay_buffer_size), dtype=np.float32)
 
         self._nominal_steps = np.zeros((max_replay_buffer_size, 1), dtype=np.int64)
+        
+        self.use_residuals = use_residuals
+        if self.use_residuals:
+            self._base_actions = np.zeros((max_replay_buffer_size, action_dim), dtype=np.float32)
 
         assert sampled_seq_len >= 2
         assert sample_weight_baseline >= 0.0
@@ -76,7 +81,8 @@ class SeqReplayBuffer:
         self._top = 0  # trajectory level (first dim in 3D buffer)
         self._size = 0  # trajectory level (first dim in 3D buffer)
 
-    def add_episode(self, observations, actions, rewards, terminals, next_observations, nominals=None):
+    def add_episode(self, observations, actions, rewards, terminals, next_observations, nominals=None,
+                    base_actions=None):
         """
         NOTE: must add one whole episode/sequence/trajectory,
                         not some partial transitions
@@ -111,6 +117,9 @@ class SeqReplayBuffer:
             assert nominals.shape == (seq_len, 1)
             assert nominals.dtype == np.int64, f"{nominals.dtype}"
             self._nominal_steps[indices] = nominals
+        
+        if self.use_residuals:
+            self._base_actions[indices] = base_actions
 
         self._top = (self._top + seq_len) % self._max_replay_buffer_size
         self._size = min(self._size + seq_len, self._max_replay_buffer_size)
@@ -172,7 +181,7 @@ class SeqReplayBuffer:
         return np.random.choice(valid_starts_indices, size=batch_size, p=sample_weights)
 
     def _sample_data(self, indices):
-        return dict(
+        batch = dict(
             obs=self._observations[indices],
             act=self._actions[indices],
             rew=self._rewards[indices],
@@ -180,6 +189,9 @@ class SeqReplayBuffer:
             obs2=self._next_observations[indices],
             nominals=self._nominal_steps[indices],
         )
+        if self.use_residuals:
+            batch['base_actions'] = self._base_actions[indices]
+        return batch
 
     def _generate_masks(self, indices, batch_size):
         """
