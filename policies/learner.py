@@ -347,7 +347,6 @@ class Learner:
             for i in range(len(self.goals)):
                 self.nominal_trajectories[self.goals[i]] = nominal_rollouts[i]
             logger.log_orange(f"Nominals used, with max_trajectory_len stays at {self.max_trajectory_len}.")
-        # self.nominal_trajectories = {float: {'observations': [Tensor[1, 28]], 'rewards': [Tensor[1,1]]}}
 
         if num_updates_per_iter is None:
             num_updates_per_iter = 1.0
@@ -818,8 +817,10 @@ class Learner:
                 worker_buffers['obs_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['observations']
                 worker_buffers['act_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['actions']
                 worker_buffers['rew_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['rewards']
-                worker_buffers['term_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['terminals']
+                worker_buffers['term_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                 worker_buffers['is_nominals'][worker_id, cur_l : cur_l + nominal_t, :] = 0
+                if return_obs_type is not None:
+                    worker_buffers['obs_return_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                 worker_buffers['list_len'][worker_id] += nominal_t
                 worker_states[worker_id]['nominal_length'] = nominal_t
 
@@ -849,7 +850,6 @@ class Learner:
                 worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
                 worker_buffers['list_len'][worker_id] += 1
 
-        goals = set()
         # act_times = [[], [], []]
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
@@ -962,7 +962,6 @@ class Learner:
             for worker_id in worker_actions.keys():
                 msg_type, (next_obs_np, reward_np, done_np, info) = parallel_env.remotes[worker_id].recv()
                 assert msg_type == 'transition'
-                goals.add(next_obs_np[-2])
 
                 # Convert to torch tensors (matching utl.env_step format)
                 next_obs = ptu.from_numpy(next_obs_np).view(-1, next_obs_np.shape[0])
@@ -1073,7 +1072,6 @@ class Learner:
                                 terminals = worker_buffers['term_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
                                 next_observations = worker_buffers['obs_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]],
                                 nominals = worker_buffers['is_nominals'][worker_id, : worker_buffers['list_len'][worker_id] - 1],
-                                # TODO: add nominals
                             )
                         else:
                             assert self.act_continuous # for sake of rigor
@@ -1109,7 +1107,7 @@ class Learner:
                     self.env_stats['rollout_success'] += int(worker_states[worker_id]['success'])
                     self.env_stats['num_rollouts'] += 1
                     self.env_stats['rollout_steps'] += worker_buffers['list_len'][worker_id]
-                    self.env_stats['action_magnitude'] += np.linalg.norm(worker_buffers['rew_list'][worker_id, worker_states[worker_id]['nominal_length'] : worker_buffers['list_len'][worker_id]], axis=-1).mean()
+                    self.env_stats['action_magnitude'] += np.linalg.norm(worker_buffers['act_list'][worker_id, worker_states[worker_id]['nominal_length'] : worker_buffers['list_len'][worker_id]], axis=-1).mean()
 
                     # Update statistics
                     self._n_env_steps_total += state['steps']
@@ -1161,8 +1159,10 @@ class Learner:
                         worker_buffers['obs_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['observations']
                         worker_buffers['act_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['actions']
                         worker_buffers['rew_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['rewards']
-                        worker_buffers['term_list'][worker_id, cur_l : cur_l + nominal_t, :] = nominal_trajectory['terminals']
+                        worker_buffers['term_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                         worker_buffers['is_nominals'][worker_id, cur_l : cur_l + nominal_t, :] = 0
+                        if return_obs_type is not None:
+                            worker_buffers['obs_return_list'][worker_id, cur_l : cur_l + nominal_t, :] = 0
                         worker_buffers['list_len'][worker_id] += nominal_t
                         worker_states[worker_id]['nominal_length'] = nominal_t
 
@@ -1191,7 +1191,6 @@ class Learner:
         # print(act_times_avg)
         assert fix_goals_i == num_rollouts
         (logger.log if not is_artificial_rollout else logger.log_orange)(f"Ending collection...")
-        (logger.log if not is_artificial_rollout else logger.log_orange)(f"Traversed goals: {goals}")
         if is_artificial_rollout:
             return collected_rollouts
         # breakpoint()
@@ -1247,8 +1246,6 @@ class Learner:
                 fix_goals=tasks,
                 return_obs_type=self.train_env.unwrapped.goal_conditioning,
             )
-
-        goals = set()
 
         if self.env_type == "meta":
             num_steps_per_episode = self.eval_env.unwrapped._max_episode_steps  # H
@@ -1338,7 +1335,6 @@ class Learner:
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )
-                    goals.add(float(next_obs[0,-2].detach().cpu()))
 
                     # clip reward if necessary for policy inputs
                     if self.reward_clip and self.env_type == "atari":
@@ -1394,7 +1390,6 @@ class Learner:
             to_log = f"""\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation() if 'annotation' in dir(self.eval_env.unwrapped) else ''}):\n{episodes_infos}\n{episodes_infos_rewards}\n"""
             logger.log(to_log)
         
-        logger.log(f"Evaluated goals: {goals}")
         return returns_per_episode, success_rate, observations, total_steps
 
     def log_train_stats(self, train_stats):
@@ -1736,7 +1731,7 @@ class Learner:
 
         logger.log("****** Cleaned up old checkpoints ******\n")
 
-    def load_ingeneral(self, agent_file: str, no_need_for_training: bool = False):
+    def load_ingeneral(self, agent_file: str, eval_only: bool = False):
         try:
             agent_file: Path = Path(agent_file)
             assert agent_file.exists()
@@ -1750,10 +1745,10 @@ class Learner:
 
             # Find the latest buffer file (only one is kept, may not match exact iteration)
             buffer_files = [fp for fp in agent_file.parent.iterdir() if fp.is_file() and fp.name.startswith("buffer_")]
-            assert no_need_for_training or len(buffer_files) > 0, "No buffer file found"
+            assert eval_only or len(buffer_files) > 0, "No buffer file found"
             # Sort by modification time to get the most recent one
             buffer_file = None
-            if not no_need_for_training:
+            if not eval_only:
                 buffer_file: Path = max(buffer_files, key=lambda p: p.stat().st_mtime)
 
             logger.log("\n****** Loading Model ******")
@@ -1798,7 +1793,7 @@ class Learner:
             logger.log("Restored RNG states")
 
             # Load buffer
-            if not no_need_for_training:
+            if not eval_only:
                 self.policy_storage = torch.load(buffer_file, map_location=ptu.device)
                 logger.log(f"Loaded buffer with size: {self.policy_storage.size()}")
 
@@ -1944,7 +1939,7 @@ class Learner:
         
         return results
 
-def pull_model(config_file: str, checkpoint_num: str, override_args: dict, no_need_for_training: bool = False):
+def pull_model(config_file: str, checkpoint_num: str, override_args: dict, eval_only: bool = False):
     assert Path(config_file).name.startswith("variant_"), f"Unable to load incorrect name: {config_file}"
     print(f"Pulling from {config_file} :")
     v = read_yaml.read_yaml_to_dict(config_file)
@@ -1968,7 +1963,13 @@ def pull_model(config_file: str, checkpoint_num: str, override_args: dict, no_ne
         assert len(agent_files_exact) > 0, f"{agent_files_exact}"
         last_agent_file = agent_files_exact[0]
     
-    learner.load_ingeneral(last_agent_file, no_need_for_training=no_need_for_training)
+    learner.load_ingeneral(last_agent_file, eval_only=eval_only)
+
+    # Freeze nominal model parameters to prevent updates
+    if eval_only:
+        for param in learner.agent.parameters():
+            param.requires_grad_(False)
+        learner.agent.eval()
 
     return learner
 
