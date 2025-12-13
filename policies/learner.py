@@ -1334,7 +1334,7 @@ class Learner:
             rewards = []
             nominals = []
             cur_nominal_index = 1
-            cur_nominal_length = nominal_trajectories[task_idx]['observations'].shape[0]
+            cur_nominal_length = nominal_trajectories[task_idx]['observations'].shape[0] if self.use_nominals else 0
 
             if self.use_nominals:
                 nominal_trajectory = nominal_trajectories[task_idx]
