@@ -151,7 +151,7 @@ class CSVOutputFormat(KVWriter):
 
     def writekvs(self, kvs):
         # Add our current row to the history
-        extra_keys = list(OrderedSet(kvs.keys()) - OrderedSet(self.keys))
+        extra_keys: set = kvs.keys() - self.keys
         if extra_keys:
             self.keys.extend(extra_keys)
             self.file.seek(0)
@@ -159,7 +159,7 @@ class CSVOutputFormat(KVWriter):
             self.file.seek(0)
             for (i, k) in enumerate(self.keys):
                 if i > 0:
-                    self.file.write(",")
+                    self.file.write(self.sep)
                 self.file.write(k)
             self.file.write("\n")
             for line in lines[1:]:
@@ -168,7 +168,7 @@ class CSVOutputFormat(KVWriter):
                 self.file.write("\n")
         for (i, k) in enumerate(self.keys):
             if i > 0:
-                self.file.write(",")
+                self.file.write(self.sep)
             v = kvs.get(k)
             if v is not None:
                 self.file.write(str(v))
