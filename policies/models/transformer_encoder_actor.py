@@ -186,7 +186,7 @@ class Actor_TransformerEncoder(nn.Module):
 
         return context  # (T * 3, N, self.hidden_size)
 
-    def forward(self, prev_actions, rewards, observs, return_log_prob:bool=False, nominals = None, base_actions = None):
+    def forward(self, prev_actions, rewards, observs, nominals = None, base_actions = None):
         """
         For prev_actions a, rewards r, observs o: (T+1, B, dim)
                 a[t] -> r[t], o[t]
@@ -221,6 +221,31 @@ class Actor_TransformerEncoder(nn.Module):
         # assert final_embed.shape == (N, self.hidden_size), f"{final_embed.shape} != {(N, self.hidden_size)}"
 
         # return self.algo.forward_actor(actor=self.policy, observ=final_embed)
+    
+    def forward_log_prob(self, prev_actions, rewards, observs, expert_actions, nominals = None, base_actions = None):
+        obs = observs
+        if nominals.dim() == 3:
+            nominals = nominals.squeeze(-1)
+        
+        context = self.get_hidden_states(obs, prev_actions, rewards, nominals)
+        T, N, _ = context.shape
+        assert context.shape == (T, N, self.hidden_size)
+
+        mask = self.mask[:T, :T]
+        decoded = self.transformer(context, mask=mask)
+        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T, N, self.hidden_size), f"{decoded.shape} != {(T, N, self.hidden_size)}"
+        obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
+        obs_embeds = decoded[obs_embed_indx, :, :]
+        # assert obs_embeds.shape == (T, N, self.hidden_size)
+        if self.use_residuals:
+            base_embeds = self.base_action_embedder(base_actions)
+            assert base_embeds.shape == (T, N, self.action_embedding_size)
+            obs_embeds = torch.cat([obs_embeds, base_embeds], dim=-1)
+        assert obs_embeds.shape == (T, N, self.policy_mlp_input_size)
+        log_probs = self.algo.forward_actor_log_prob(actor=self.policy, observ=obs_embeds[:-1], actions=expert_actions)
+        # assert actions.shape == (T, N, prev_actions.shape[2])
+        # assert log_probs.shape == (T, N, 1)
+        return log_probs
 
     @torch.no_grad()
     def get_initial_info(self):

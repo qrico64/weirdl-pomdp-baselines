@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch import nn as nn
 import torch.nn.functional as F
+from torchkit import pytorch_utils as ptu
 
 from torch.distributions import Categorical
 from torchkit.distributions import TanhNormal
@@ -173,6 +174,33 @@ class TanhGaussianPolicy(MarkovPolicyBase):
                     action = tanh_normal.sample()
 
         return action, mean, log_std, log_prob
+
+    def log_prob(self, obs, actions):
+        """
+        Compute log probabilities of given actions under the current policy.
+
+        :param obs: Observation, usually 2D (B, dim), but maybe 3D (T, B, dim)
+        :param actions: Actions to compute log probabilities for, same shape as obs except last dim is action_dim
+        :return: log_prob (*, B, 1) - log probabilities of the given actions
+        """
+        h = self.preprocess(obs)
+        for fc in self.fcs:
+            h = self.hidden_activation(fc(h))
+        mean = self.last_fc(h)
+        if self.std is None:
+            log_std = self.last_fc_log_std(h)
+            log_std = torch.clamp(log_std, LOG_SIG_MIN, LOG_SIG_MAX)
+            std = torch.exp(log_std)
+        else:
+            std = self.std
+            log_std = self.log_std
+
+        tanh_normal = TanhNormal(mean, std)
+        actions = torch.clip(actions, -0.999, 0.999)
+        log_prob = tanh_normal.log_prob(actions)
+        log_prob = log_prob.sum(dim=-1, keepdim=True)  # (*, B, 1)
+
+        return log_prob
 
 
 class CategoricalPolicy(MarkovPolicyBase):

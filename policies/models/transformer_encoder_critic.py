@@ -27,6 +27,7 @@ class Critic_TransformerEncoder(nn.Module):
         combined_embedding_size: int = None,
         nominal_embedding_size: int = 0,
         num_trajectories: int = 2,
+        is_value_fn: bool = False, # value can honestly be its own class, but i thought this is more concise
         **kwargs
     ):
         assert max_len is not None
@@ -42,6 +43,7 @@ class Critic_TransformerEncoder(nn.Module):
         self.max_len = max_len
         self.nominal_embedding_size = nominal_embedding_size
         self.num_trajectories = num_trajectories
+        self.is_value_fn = is_value_fn
 
         ### Build Model
         ## 1. embed action, state, reward (Feed-forward layers first)
@@ -111,11 +113,17 @@ class Critic_TransformerEncoder(nn.Module):
         logger.log(f"****** Created actor transformer ******\n")
 
         ## 4. build q networks
-        self.qf1, self.qf2 = self.algo.build_critic(
-            input_size=self.hidden_size + self.action_embedding_size,
-            hidden_sizes=dqn_layers,
-            action_dim=action_dim,
-        )
+        if not self.is_value_fn:
+            self.qf1, self.qf2 = self.algo.build_critic(
+                input_size=self.hidden_size + self.action_embedding_size,
+                hidden_sizes=dqn_layers,
+                action_dim=action_dim,
+            )
+        else:
+            self.vf = self.algo.build_value(
+                hidden_sizes=dqn_layers,
+                input_size=self.hidden_size,
+            )
 
         self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.max_context_len)
         self.mask = torch.triu(ptu.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
@@ -169,7 +177,7 @@ class Critic_TransformerEncoder(nn.Module):
 
         return context  # (T * 3, N, self.hidden_size)
 
-    def forward(self, prev_actions, rewards, observs, current_actions, nominals = None):
+    def forward(self, prev_actions, rewards, observs, current_actions=None, nominals = None):
         """
         For prev_actions a, rewards r, observs o: (T+1, B, dim)
                 a[t] -> r[t], o[t]
@@ -185,8 +193,6 @@ class Critic_TransformerEncoder(nn.Module):
 
         # assert current_actions is not None
         # assert current_actions.shape == (T, N, prev_actions.shape[2]) or current_actions.shape == (T - 1, N, prev_actions.shape[2]), f"{current_actions.shape} != {(T, N, prev_actions.shape[2])} or {(T - 1, N, prev_actions.shape[2])}"
-        curaT = current_actions.shape[0]
-        current_actions_encs = self.action_embedder(current_actions)
 
         mask = self.mask[:T, :T]
         decoded = self.transformer(context, mask=mask)
@@ -194,10 +200,20 @@ class Critic_TransformerEncoder(nn.Module):
         obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
         obs_embeds = decoded[obs_embed_indx, :, :]
         # assert obs_embeds.shape == (T, N, self.hidden_size), f"{obs_embeds.shape} != {(T, N, self.hidden_size)}"
-        final_embeds = torch.cat([obs_embeds[:curaT], current_actions_encs], dim=-1)
-        # assert final_embeds.shape == (curaT, N, self.hidden_size * 2)
 
-        q1 = self.qf1(final_embeds)
-        q2 = self.qf2(final_embeds)
+        if self.is_value_fn:
+            assert current_actions is None
+            v = self.vf(obs_embeds)
+            assert v.shape == (T, N, 1), f"{v.shape} != {(T, N, 1)}"
+            return v
+        else:
+            assert current_actions is not None
+            curaT = current_actions.shape[0]
+            assert curaT == T - 1 or curaT == T, f"{curaT}, {T}"
+            current_actions_encs = self.action_embedder(current_actions)
+            final_embeds = torch.cat([obs_embeds[:curaT], current_actions_encs], dim=-1)
+            # assert final_embeds.shape == (curaT, N, self.hidden_size * 2)
+            q1 = self.qf1(final_embeds)
+            q2 = self.qf2(final_embeds)
 
-        return q1, q2  # (T or T+1, B, 1 or A)
+            return q1, q2  # (T or T+1, B, 1 or A)

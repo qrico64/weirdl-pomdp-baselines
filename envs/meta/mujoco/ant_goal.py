@@ -80,7 +80,7 @@ class AntGoalEnv(MultitaskAntEnv):
         self.do_simulation(action, self.frame_skip)
         torso_xyz_after = np.array(self.get_body_com("torso"))
         torso_velocity = torso_xyz_after - torso_xyz_before
-        forward_reward = -np.sum(np.abs(torso_xyz_after[:2] - direct)) * self.reward_scale
+        forward_reward = -np.linalg.norm(torso_xyz_after[:2] - direct) * self.reward_scale
 
         ctrl_cost = 0.5 * np.square(action).sum()
         contact_cost = (

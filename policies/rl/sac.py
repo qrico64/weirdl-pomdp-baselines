@@ -95,6 +95,7 @@ class SAC(RLAlgorithmBase):
         nominals=None,
         base_actions=None,
         masks=None,
+        value_fn=None,
     ):
         T1, B, _ = rewards.shape
         # Q^tar(h(t+1), pi(h(t+1))) + H[pi(h(t+1))]
@@ -189,6 +190,7 @@ class SAC(RLAlgorithmBase):
         nominals=None,
         base_actions=None,
         masks=None,
+        value_fn=None,
     ):
         if markov_actor:
             new_actions, log_probs = self.forward_actor(actor, observs)

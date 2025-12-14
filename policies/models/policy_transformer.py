@@ -20,6 +20,7 @@ from policies.models.recurrent_actor import Actor_RNN
 from policies.models.transformer_encoder_critic import Critic_TransformerEncoder
 from policies.models.transformer_encoder_actor import Actor_TransformerEncoder
 from utils import logger
+from policies.rl import RL_ALGORITHM_PROPERTIES
 
 
 class ModelFreeOffPolicy_Transformer(nn.Module):
@@ -58,6 +59,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
     ):
         super().__init__()
 
+        self.algo_name = algo_name
+        self.use_value_fn = RL_ALGORITHM_PROPERTIES['use_value_fn'][algo_name]
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.gamma = gamma
@@ -84,10 +87,35 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             combined_embedding_size=combined_embedding_size,
             nominal_embedding_size=nominal_embedding_size,
             num_trajectories=num_trajectories,
+            is_value_fn=False,
         )
         self.critic_optimizer = Adam(self.critic.parameters(), lr=lr)
         # target networks
         self.critic_target = deepcopy(self.critic)
+
+        self.value = None
+        self.value_optimizer = None
+        if self.use_value_fn:
+            self.value = Critic_TransformerEncoder(
+                obs_dim,
+                action_dim,
+                encoder,
+                self.algo,
+                action_embedding_size,
+                observ_embedding_size,
+                reward_embedding_size,
+                dqn_layers,
+                rnn_num_layers,
+                max_len=max_len,
+                image_encoder=image_encoder_fn(),  # separate weight
+                feature_extractor_type=feature_extractor_type,
+                combined_embedding_size=combined_embedding_size,
+                nominal_embedding_size=nominal_embedding_size,
+                num_trajectories=num_trajectories,
+                is_value_fn=True,
+            )
+            self.value_optimizer = Adam(self.value.parameters(), lr=lr)
+            # no need for value target since it's iql
 
         # Actor
         self.actor = Actor_TransformerEncoder(
@@ -170,6 +198,29 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         )
         num_valid = torch.clamp(masks.sum(), min=1.0)  # as denominator of loss
 
+        if self.use_value_fn:
+            value_loss = self.algo.value_loss(
+                markov_actor=self.Markov_Actor,
+                markov_critic=self.Markov_Critic,
+                transformer=True,
+                actor=self.actor,
+                actor_target=self.actor_target,
+                critic=self.critic,
+                critic_target=self.critic_target,
+                observs=observs,
+                actions=actions,
+                rewards=rewards,
+                dones=dones,
+                gamma=self.gamma,
+                nominals=nominals,
+                base_actions=base_actions,
+                masks=masks,
+                value_fn=self.value,
+            )
+            self.value_optimizer.zero_grad()
+            value_loss.backward()
+            self.value_optimizer.step()
+
         ### 1. Critic loss
         qf1_loss, qf2_loss = self.algo.critic_loss(
             markov_actor=self.Markov_Actor,
@@ -187,6 +238,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             nominals=nominals,
             base_actions=base_actions,
             masks=masks,
+            value_fn=self.value,
         )
 
         self.critic_optimizer.zero_grad()
@@ -207,6 +259,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
             nominals=nominals,
             base_actions=base_actions,
             masks=masks,
+            value_fn=self.value,
         )
 
         self.actor_optimizer.zero_grad()
@@ -223,7 +276,7 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         self.soft_target_update()
 
         ### 4. update others like alpha
-        if log_probs is not None:
+        if log_probs is not None and self.algo_name != "iql":
             # extract valid log_probs
             with torch.no_grad():
                 current_log_probs = (log_probs[:-1] * masks).sum() / num_valid
