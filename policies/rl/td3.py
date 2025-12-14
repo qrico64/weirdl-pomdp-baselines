@@ -74,6 +74,7 @@ class TD3(RLAlgorithmBase):
         dones,
         gamma,
         next_observs=None,  # used in markov_critic
+        masks=None,
     ):
         with torch.no_grad():
             # first next_actions from target policy,
@@ -120,7 +121,21 @@ class TD3(RLAlgorithmBase):
                 current_actions=actions[1:],
             )  # (T, B, 1)
 
-        return (q1_pred, q2_pred), q_target
+        # Compute losses with masking
+        if masks is not None:
+            # Apply masking and compute loss
+            num_valid = torch.clamp(masks.sum(), min=1.0)
+            q1_pred_masked = q1_pred * masks
+            q2_pred_masked = q2_pred * masks
+            q_target_masked = q_target * masks
+            qf1_loss = ((q1_pred_masked - q_target_masked) ** 2).sum() / num_valid
+            qf2_loss = ((q2_pred_masked - q_target_masked) ** 2).sum() / num_valid
+        else:
+            # Markovian case: use mean
+            qf1_loss = ((q1_pred - q_target) ** 2).mean()
+            qf2_loss = ((q2_pred - q_target) ** 2).mean()
+
+        return qf1_loss, qf2_loss
 
     def actor_loss(
         self,

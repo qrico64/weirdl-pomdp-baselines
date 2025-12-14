@@ -151,7 +151,7 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
         num_valid = torch.clamp(masks.sum(), min=1.0)  # as denominator of loss
 
         ### 1. Critic loss
-        (q1_pred, q2_pred), q_target = self.algo.critic_loss(
+        qf1_loss, qf2_loss = self.algo.critic_loss(
             markov_actor=self.Markov_Actor,
             markov_critic=self.Markov_Critic,
             actor=self.actor,
@@ -164,15 +164,8 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
             dones=dones,
             gamma=self.gamma,
             transformer=False,
+            masks=masks,
         )
-
-        # masked Bellman error: masks (T,B,1) ignore the invalid error
-        # this is not equal to masks * q1_pred, cuz the denominator in mean()
-        # 	should depend on masks > 0.0, not a constant B*T
-        q1_pred, q2_pred = q1_pred * masks, q2_pred * masks
-        q_target = q_target * masks
-        qf1_loss = ((q1_pred - q_target) ** 2).sum() / num_valid  # TD error
-        qf2_loss = ((q2_pred - q_target) ** 2).sum() / num_valid  # TD error
 
         self.critic_optimizer.zero_grad()
         (qf1_loss + qf2_loss).backward()

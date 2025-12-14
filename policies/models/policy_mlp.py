@@ -80,7 +80,7 @@ class ModelFreeOffPolicy_MLP(nn.Module):
         actions, rewards, dones = batch["act"], batch["rew"], batch["term"]  # (B, dim)
 
         ### 1. Critic loss
-        (q1_pred, q2_pred), q_target = self.algo.critic_loss(
+        qf1_loss, qf2_loss = self.algo.critic_loss(
             markov_actor=self.Markov_Actor,
             markov_critic=self.Markov_Critic,
             actor=self.policy,
@@ -93,10 +93,8 @@ class ModelFreeOffPolicy_MLP(nn.Module):
             dones=dones,
             gamma=self.gamma,
             next_observs=next_observs,
+            masks=None,
         )
-
-        qf1_loss = F.mse_loss(q1_pred, q_target)  # TD error
-        qf2_loss = F.mse_loss(q2_pred, q_target)  # TD error
 
         # update q networks
         self.qf1_optim.zero_grad()
