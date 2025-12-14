@@ -454,21 +454,12 @@ class Learner:
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
-            if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
-                self.collect_rollouts_parallel(
-                    num_rollouts=self.num_init_rollouts_pool,
-                    random_actions=True,
-                    parallel_env=self.train_env_parallel,
-                )
-            else:
-                while (
-                    self._n_env_steps_total
-                    < self.num_init_rollouts_pool * self.max_trajectory_len
-                ):
-                    self.collect_rollouts(
-                        num_rollouts=1,
-                        random_actions=True,
-                    )
+            assert self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None
+            self.collect_rollouts_parallel(
+                num_rollouts=self.num_init_rollouts_pool,
+                random_actions=True,
+                parallel_env=self.train_env_parallel,
+            )
             logger.log(
                 "Done! env steps",
                 self._n_env_steps_total,
@@ -509,13 +500,11 @@ class Learner:
         while self._n_env_steps_total < self.n_env_steps_total:
             # collect data from num_rollouts_per_iter train tasks:
             # Use parallel collection if available
-            if self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None:
-                env_steps = self.collect_rollouts_parallel(
-                    num_rollouts=self.num_rollouts_per_iter,
-                    parallel_env=self.train_env_parallel,
-                )
-            else:
-                env_steps = self.collect_rollouts(num_rollouts=self.num_rollouts_per_iter)
+            assert self.env_type == "meta" and hasattr(self, 'train_env_parallel') and self.train_env_parallel is not None
+            env_steps = self.collect_rollouts_parallel(
+                num_rollouts=self.num_rollouts_per_iter,
+                parallel_env=self.train_env_parallel,
+            )
             logger.log("env steps", self._n_env_steps_total)
 
             # Calculate number of updates needed
@@ -558,142 +547,6 @@ class Learner:
 
         # Clean up parallel environments
         self.cleanup()
-
-    @torch.no_grad()
-    def collect_rollouts(self, num_rollouts, random_actions=False):
-        """collect num_rollouts of trajectories in task and save into policy buffer
-        :param random_actions: whether to use policy to sample actions, or randomly sample action space
-        """
-
-        before_env_steps = self._n_env_steps_total
-        for idx in range(num_rollouts):
-            steps = 0
-
-            if self.env_type == "meta" and self.train_env.n_tasks is not None:
-                task = self.train_tasks[np.random.randint(len(self.train_tasks))]
-                obs = ptu.from_numpy(self.train_env.reset(task=task))  # reset task
-            else:
-                obs = ptu.from_numpy(self.train_env.reset())  # reset
-
-            obs = obs.reshape(1, obs.shape[-1])
-            done_rollout = False
-
-            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                # temporary storage
-                obs_list, act_list, rew_list, next_obs_list, term_list = (
-                    [],
-                    [],
-                    [],
-                    [],
-                    [],
-                )
-
-            if self.agent_arch == AGENT_ARCHS.Memory:
-                # get hidden state at timestep=0, None for markov
-                # NOTE: assume initial reward = 0.0 (no need to clip)
-                action, reward, internal_state = self.agent.get_initial_info()
-
-            while not done_rollout:
-                if random_actions:
-                    action = ptu.FloatTensor(
-                        [self.train_env.action_space.sample()]
-                    )  # (1, A) for continuous action, (1) for discrete action
-                    if not self.act_continuous:
-                        action = F.one_hot(
-                            action.long(), num_classes=self.act_dim
-                        ).float()  # (1, A)
-                else:
-                    # policy takes hidden state as input for memory-based actor,
-                    # while takes obs for markov actor
-                    if self.agent_arch == AGENT_ARCHS.Memory:
-                        (action, _, _, _), internal_state = self.agent.act(
-                            prev_internal_state=internal_state,
-                            prev_action=action,
-                            reward=reward,
-                            obs=obs,
-                            deterministic=False,
-                        )
-                    else:
-                        action, _, _, _ = self.agent.act(obs, deterministic=False)
-
-                # observe reward and next obs (B=1, dim)
-                next_obs, reward, done, info = utl.env_step(
-                    self.train_env, action.squeeze(dim=0)
-                )
-                if self.reward_clip and self.env_type == "atari":
-                    reward = torch.tanh(reward)
-
-                done_rollout = False if ptu.get_numpy(done[0][0]) == 0.0 else True
-                # update statistics
-                steps += 1
-
-                ## determine terminal flag per environment
-                if self.env_type == "meta" and "is_goal_state" in dir(
-                    self.train_env.unwrapped
-                ):
-                    # NOTE: following varibad practice: for meta env, even if reaching the goal (term=True),
-                    # the episode still continues.
-                    term = self.train_env.unwrapped.is_goal_state()
-                    self._successes_in_buffer += int(term)
-                elif self.env_type == "credit":  # delayed rewards
-                    term = done_rollout
-                else:
-                    # term ignore time-out scenarios, but record early stopping
-                    term = (
-                        False
-                        if "TimeLimit.truncated" in info
-                        or steps >= self.max_trajectory_len
-                        else done_rollout
-                    )
-
-                # add data to policy buffer
-                if self.agent_arch == AGENT_ARCHS.Markov:
-                    self.policy_storage.add_sample(
-                        observation=ptu.get_numpy(obs.squeeze(dim=0)),
-                        action=ptu.get_numpy(
-                            action.squeeze(dim=0)
-                            if self.act_continuous
-                            else torch.argmax(
-                                action.squeeze(dim=0), dim=-1, keepdims=True
-                            )  # (1,)
-                        ),
-                        reward=ptu.get_numpy(reward.squeeze(dim=0)),
-                        terminal=np.array([term], dtype=float),
-                        next_observation=ptu.get_numpy(next_obs.squeeze(dim=0)),
-                    )
-                else:  # append tensors to temporary storage
-                    obs_list.append(obs)  # (1, dim)
-                    act_list.append(action)  # (1, dim)
-                    rew_list.append(reward)  # (1, dim)
-                    term_list.append(term)  # bool
-                    next_obs_list.append(next_obs)  # (1, dim)
-
-                # set: obs <- next_obs
-                obs = next_obs.clone()
-
-            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                # add collected sequence to buffer
-                act_buffer = torch.cat(act_list, dim=0)  # (L, dim)
-                if not self.act_continuous:
-                    act_buffer = torch.argmax(
-                        act_buffer, dim=-1, keepdims=True
-                    )  # (L, 1)
-
-                self.policy_storage.add_episode(
-                    observations=ptu.get_numpy(torch.cat(obs_list, dim=0)),  # (L, dim)
-                    actions=ptu.get_numpy(act_buffer),  # (L, dim)
-                    rewards=ptu.get_numpy(torch.cat(rew_list, dim=0)),  # (L, dim)
-                    terminals=np.array(term_list).reshape(-1, 1),  # (L, 1)
-                    next_observations=ptu.get_numpy(
-                        torch.cat(next_obs_list, dim=0)
-                    ),  # (L, dim)
-                )
-                print(
-                    f"steps: {steps} term: {term} ret: {torch.cat(rew_list, dim=0).sum().item():.2f}"
-                )
-            self._n_env_steps_total += steps
-            self._n_rollouts_total += 1
-        return self._n_env_steps_total - before_env_steps
 
     @torch.no_grad()
     def collect_rollouts_parallel(self, num_rollouts, random_actions=False, parallel_env: ParallelEnvManager = None,
@@ -1894,142 +1747,6 @@ class Learner:
         except Exception as e:
             logger.log(f"Failed to load from {agent_file.resolve()}: {e}")
             raise
-
-    @torch.no_grad()
-    def rollout_model_virtually(self, results: list, deterministic=False):
-        """
-        Roll out the current RNN over a pre-recorded trajectory.
-
-        Args:
-            results: List of trajectory dictionaries with the same format as rollout_model output.
-                    Each dict contains 'observations', 'actions', 'rewards', 'dones', 'next_observations'.
-            deterministic: Whether to use deterministic actions (default: False)
-
-        Returns:
-            List of dictionaries, each containing:
-                - 'actions': list of action tensors generated by the current policy
-                - 'internal_states': list of internal states (for memory-based agents)
-        """
-        virtual_results = []
-
-        for trajectory in results:
-            virtual_trajectory = {
-                'actions': [],
-                'internal_states': [],
-            }
-
-            # Get the observations from the pre-recorded trajectory
-            trajectory_obs = trajectory['observations']
-            trajectory_rewards = trajectory['rewards']
-
-            # Initialize agent state for memory-based agents
-            if self.agent_arch == AGENT_ARCHS.Memory:
-                action, reward, internal_state = self.agent.get_initial_info()
-
-            # Roll out the policy over the trajectory
-            for step_idx in range(len(trajectory_obs)):
-                obs = trajectory_obs[step_idx]
-
-                # Ensure obs has batch dimension
-                if obs.dim() == 1:
-                    obs = obs.unsqueeze(0)
-
-                # Get action from current policy
-                if self.agent_arch == AGENT_ARCHS.Memory:
-                    (action, _, _, _), internal_state = self.agent.act(
-                        prev_internal_state=internal_state,
-                        prev_action=action,
-                        reward=reward,
-                        obs=obs,
-                        deterministic=deterministic,
-                    )
-                    # Use the trajectory's actual reward for the next step
-                    reward = trajectory_rewards[step_idx]
-
-                    # Store internal state
-                    virtual_trajectory['internal_states'].append(internal_state)
-                else:
-                    action, _, _, _ = self.agent.act(
-                        obs, deterministic=deterministic
-                    )
-
-                # Store the generated action
-                virtual_trajectory['actions'].append(action)
-
-            virtual_results.append(virtual_trajectory)
-
-        return virtual_results
-    
-    def rollout_model(self, num_episodes: int, task_dict: dict, deterministic=False):
-        results = []
-
-        if self.env_type == "meta":
-            num_steps_per_episode = self.eval_env.unwrapped._max_episode_steps
-        else:
-            num_steps_per_episode = self.eval_env._max_episode_steps
-
-        while len(results) < num_episodes:
-            current = {
-                'observations': [],
-                'actions': [],
-                'rewards': [],
-                'dones': [],
-                'next_observations': [],
-            }
-
-            if self.env_type == "meta" and self.eval_env.n_tasks is not None:
-                obs = ptu.from_numpy(self.eval_env.reset(task=0, override_task=task_dict))
-            else:
-                obs = ptu.from_numpy(self.eval_env.reset())
-            obs = obs.reshape(1, obs.shape[-1])
-
-            if self.agent_arch == AGENT_ARCHS.Memory:
-                action, reward, internal_state = self.agent.get_initial_info()
-
-            for _ in range(num_steps_per_episode):
-                if self.agent_arch == AGENT_ARCHS.Memory:
-                    (action, _, _, _), internal_state = self.agent.act(
-                        prev_internal_state=internal_state,
-                        prev_action=action,
-                        reward=reward,
-                        obs=obs,
-                        deterministic=deterministic,
-                    )
-                else:
-                    action, _, _, _ = self.agent.act(
-                        obs, deterministic=deterministic
-                    )
-
-                # observe reward and next obs
-                next_obs, reward, done, info = utl.env_step(
-                    self.eval_env, action.squeeze(dim=0)
-                )
-
-                # clip reward if necessary for policy inputs
-                if self.reward_clip and self.env_type == "atari":
-                    reward = torch.tanh(reward)
-
-                current['observations'].append(obs)
-                current['actions'].append(action)
-                current['rewards'].append(reward)
-                current['dones'].append(done)
-                current['next_observations'].append(next_obs)
-
-                done_rollout = False if ptu.get_numpy(done[0][0]) == 0.0 else True
-
-                # set: obs <- next_obs
-                obs = next_obs.clone()
-
-                if done_rollout:
-                    # for all env types, same
-                    break
-                if self.env_type == "meta" and info["done_mdp"] == True:
-                    # for early stopping meta episode like Ant-Dir
-                    break
-
-            results.append(current)
-        
-        return results
 
 def pull_model(config_file: str, checkpoint_num: str, override_args: dict, eval_only: bool = False):
     assert Path(config_file).name.startswith("variant_"), f"Unable to load incorrect name: {config_file}"
