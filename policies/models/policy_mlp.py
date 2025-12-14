@@ -118,8 +118,8 @@ class ModelFreeOffPolicy_MLP(nn.Module):
             critic=(self.qf1, self.qf2),
             critic_target=(self.qf1_target, self.qf2_target),
             observs=observs,
+            masks=None,
         )
-        policy_loss = policy_loss.mean()
 
         # update policy network
         self.policy_optim.zero_grad()

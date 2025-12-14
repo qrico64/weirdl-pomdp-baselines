@@ -189,9 +189,8 @@ class ModelFreeOffPolicy_Separate_RNN(nn.Module):
             observs=observs,
             actions=actions,
             rewards=rewards,
+            masks=masks,
         )
-        # masked policy_loss
-        policy_loss = (policy_loss * masks).sum() / num_valid
 
         self.actor_optimizer.zero_grad()
         policy_loss.backward()

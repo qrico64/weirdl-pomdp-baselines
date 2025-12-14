@@ -133,6 +133,7 @@ class TD3(RLAlgorithmBase):
         observs,
         actions=None,
         rewards=None,
+        masks=None,
     ):
 
         if markov_actor:
@@ -157,6 +158,15 @@ class TD3(RLAlgorithmBase):
         policy_loss = -min_q_new_actions
         if not markov_critic:
             policy_loss = policy_loss[:-1]  # (T,B,1) remove the last obs
+
+        # Apply masking and normalization
+        if masks is not None:
+            num_valid = torch.clamp(masks.sum(), min=1.0)
+            policy_loss = (policy_loss * masks).sum() / num_valid
+        else:
+            # For Markovian case, just take the mean
+            policy_loss = policy_loss.mean()
+
         return policy_loss, None
 
     #### Below are used in shared RNN setting

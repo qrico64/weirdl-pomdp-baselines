@@ -173,6 +173,7 @@ class SAC(RLAlgorithmBase):
         rewards=None,
         nominals=None,
         base_actions=None,
+        masks=None,
     ):
         if markov_actor:
             new_actions, log_probs = self.forward_actor(actor, observs)
@@ -201,6 +202,14 @@ class SAC(RLAlgorithmBase):
         policy_loss += self.alpha_entropy * log_probs
         if not markov_critic:
             policy_loss = policy_loss[:-1]  # (T,B,1) remove the last obs
+
+        # Apply masking and normalization
+        if masks is not None:
+            num_valid = torch.clamp(masks.sum(), min=1.0)
+            policy_loss = (policy_loss * masks).sum() / num_valid
+        else:
+            # For Markovian case, just take the mean
+            policy_loss = policy_loss.mean()
 
         return policy_loss, log_probs
 
