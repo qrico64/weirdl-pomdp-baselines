@@ -27,11 +27,11 @@ train:
   # original rl training steps: num_iters * updates_per_iter = 1M
     # now makes it same as env steps
   num_iters: 3000
-  num_init_rollouts_pool: 500 # before training
+  num_init_rollouts_pool: 50 # before training
   num_rollouts_per_iter: 30  #
   buffer_size: 3e6
 
-  num_updates_per_iter: 0.02 # equal, or positive integer
+  num_updates_per_iter: 0.01 # equal, or positive integer
   batch_size: 18 # to tune based on sampled_seq_len
   sampled_seq_len: -1 # -1 is all, or positive integer
   sample_weight_baseline: 0.0
@@ -41,7 +41,7 @@ train:
 
 eval:
   eval_stochastic: false # also eval stochastic policy
-  log_interval: 8 # num of iters
+  log_interval: 1 # num of iters
   save_interval: 512
   log_tensorboard: true
 

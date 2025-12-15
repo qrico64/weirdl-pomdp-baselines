@@ -3,15 +3,15 @@
     https://github.com/lmzintgraf/varibad/blob/master/environments/mujoco/humanoid_dir.py
 """
 import numpy as np
-from gym.envs.mujoco import HumanoidEnv as HumanoidEnv
-from gym import spaces
+from gymnasium.envs.mujoco import HumanoidEnv as HumanoidEnv
+from gymnasium import spaces
 
 import random
 
 
-def mass_center(model, sim):
+def mass_center(model, data):
     mass = np.expand_dims(model.body_mass, 1)
-    xpos = sim.data.xipos
+    xpos = data.xipos
     return np.sum(mass * xpos, 0) / np.sum(mass)
 
 
@@ -24,13 +24,13 @@ class HumanoidDirEnv(HumanoidEnv):
         super(HumanoidDirEnv, self).__init__()
 
     def step(self, action):
-        pos_before = np.copy(mass_center(self.model, self.sim)[:2])
+        pos_before = np.copy(mass_center(self.model, self.data)[:2])
 
         self.do_simulation(action, self.frame_skip)
-        pos_after = mass_center(self.model, self.sim)[:2]
+        pos_after = mass_center(self.model, self.data)[:2]
 
         alive_bonus = 5.0
-        data = self.sim.data
+        data = self.data
         goal_direction = (np.cos(self._goal), np.sin(self._goal))
 
         lin_vel_cost = (
@@ -42,7 +42,7 @@ class HumanoidDirEnv(HumanoidEnv):
         quad_impact_cost = 0.5e-6 * np.square(data.cfrc_ext).sum()
         quad_impact_cost = min(quad_impact_cost, 10)
         reward = lin_vel_cost - quad_ctrl_cost - quad_impact_cost + alive_bonus
-        qpos = self.sim.data.qpos
+        qpos = self.data.qpos
 
         done = bool((qpos[2] < 1.0) or (qpos[2] > 2.0))
         # done = False
@@ -51,6 +51,7 @@ class HumanoidDirEnv(HumanoidEnv):
             self._get_obs(),
             reward,
             done,
+            False,
             dict(
                 reward_linvel=lin_vel_cost,
                 reward_quadctrl=-quad_ctrl_cost,
@@ -60,7 +61,7 @@ class HumanoidDirEnv(HumanoidEnv):
         )
 
     def _get_obs(self):
-        data = self.sim.data
+        data = self.data
         return np.concatenate(
             [
                 data.qpos.flat[2:],

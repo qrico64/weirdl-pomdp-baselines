@@ -1,7 +1,7 @@
 import json
 import os
 
-import gym
+import gymnasium as gym
 
 
 class MonitorParameters(gym.Wrapper):

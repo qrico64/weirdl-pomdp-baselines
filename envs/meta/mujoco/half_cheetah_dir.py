@@ -31,9 +31,9 @@ class HalfCheetahDirEnv(HalfCheetahEnv):
         super(HalfCheetahDirEnv, self).__init__()
 
     def step(self, action):
-        xposbefore = self.sim.data.qpos[0]
+        xposbefore = self.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
-        xposafter = self.sim.data.qpos[0]
+        xposafter = self.data.qpos[0]
 
         forward_vel = (xposafter - xposbefore) / self.dt
         forward_reward = self._goal * forward_vel
@@ -43,7 +43,7 @@ class HalfCheetahDirEnv(HalfCheetahEnv):
         reward = forward_reward - ctrl_cost
         done = False
         infos = dict(reward_forward=forward_reward, reward_ctrl=-ctrl_cost)
-        return observation, reward, done, infos
+        return observation, reward, done, False, infos
 
     def get_current_task(self):
         # for multi-task MDP
@@ -68,8 +68,8 @@ class HalfCheetahRandDirOracleEnv(HalfCheetahDirEnv):
         return (
             np.concatenate(
                 [
-                    self.sim.data.qpos.flat[1:],
-                    self.sim.data.qvel.flat,
+                    self.data.qpos.flat[1:],
+                    self.data.qvel.flat,
                     self.get_body_com("torso").flat,
                     [self._goal],
                 ]

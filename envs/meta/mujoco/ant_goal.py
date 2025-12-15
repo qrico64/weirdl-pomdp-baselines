@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Literal
 from utils import logger
+import gymnasium as gym
 
 from .ant_multitask_base import MultitaskAntEnv
 from utils import helpers
@@ -63,6 +64,10 @@ class AntGoalEnv(MultitaskAntEnv):
         logger.log()
 
         super(AntGoalEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
+
+        # Update observation space: base (27) + goal (0 or 1) + reward (0 or 1)
+        obs_dim = 27 + (2 if self.goal_conditioning != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
+        self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float64)
     
     def set_return_obs_type(self, return_obs_type):
         self.return_obs_type = return_obs_type
@@ -84,7 +89,7 @@ class AntGoalEnv(MultitaskAntEnv):
 
         ctrl_cost = 0.5 * np.square(action).sum()
         contact_cost = (
-            0.5 * 1e-3 * np.sum(np.square(np.clip(self.sim.data.cfrc_ext, -1, 1)))
+            0.5 * 1e-3 * np.sum(np.square(np.clip(self.data.cfrc_ext, -1, 1)))
         )
         survive_reward = 1.0
         reward = forward_reward - ctrl_cost - contact_cost + survive_reward
@@ -96,6 +101,7 @@ class AntGoalEnv(MultitaskAntEnv):
             ob,
             reward,
             done,
+            False,
             dict(
                 reward_forward=forward_reward,
                 reward_ctrl=-ctrl_cost,
@@ -243,7 +249,7 @@ class AntGoalEnv(MultitaskAntEnv):
                    and the angle increases counter-clockwise.
         """
         # Get quaternion from qpos: [x, y, z, qw, qx, qy, qz]
-        qpos = self.sim.data.qpos
+        qpos = self.data.qpos
         qw, qx, qy, qz = qpos[3], qpos[4], qpos[5], qpos[6]
 
         # Convert quaternion to Euler angles and extract yaw (z-axis rotation)

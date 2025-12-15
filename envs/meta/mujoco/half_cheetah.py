@@ -1,5 +1,5 @@
 import numpy as np
-from gym.envs.mujoco import HalfCheetahEnv as HalfCheetahEnv_
+from gymnasium.envs.mujoco import HalfCheetahEnv as HalfCheetahEnv_
 import torch
 import matplotlib.pyplot as plt
 from utils import helpers as utl
@@ -12,8 +12,8 @@ class HalfCheetahEnv(HalfCheetahEnv_):
         return (
             np.concatenate(
                 [
-                    self.sim.data.qpos.flat[1:],
-                    self.sim.data.qvel.flat,
+                    self.data.qpos.flat[1:],
+                    self.data.qvel.flat,
                     self.get_body_com("torso").flat,
                 ]
             )

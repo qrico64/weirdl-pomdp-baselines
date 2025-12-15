@@ -6,7 +6,7 @@ import time
 import datetime
 import dateutil.tz
 import tempfile
-from collections import OrderedDict, Set
+from collections import OrderedDict
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -22,21 +22,6 @@ WARN = 30
 ERROR = 40
 
 DISABLED = 50
-
-
-class OrderedSet(Set):
-    # https://stackoverflow.com/a/10006674/9072850
-    def __init__(self, iterable=()):
-        self.d = OrderedDict.fromkeys(iterable)
-
-    def __len__(self):
-        return len(self.d)
-
-    def __contains__(self, element):
-        return element in self.d
-
-    def __iter__(self):
-        return iter(self.d)
 
 
 class KVWriter(object):

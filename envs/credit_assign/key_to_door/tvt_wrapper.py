@@ -1,5 +1,5 @@
 import numpy as np
-import gym
+import gymnasium as gym
 from envs.credit_assign.key_to_door import env, key_to_door
 
 

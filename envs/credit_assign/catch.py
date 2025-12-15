@@ -7,7 +7,7 @@ Time_steps = (Number of runs - 1) * 7 + 6
 
 
 import numpy as np
-import gym
+import gymnasium as gym
 
 
 class DelayedCatch(gym.Env):

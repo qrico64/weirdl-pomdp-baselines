@@ -1,4 +1,3 @@
-# -*- coding: future_fstrings -*-
 import os, sys
 import time
 import threading
@@ -8,7 +7,7 @@ import math
 import numpy as np
 import torch
 from torch.nn import functional as F
-import gym
+import gymnasium as gym
 from pathlib import Path
 from scripts import read_yaml
 from utils import system

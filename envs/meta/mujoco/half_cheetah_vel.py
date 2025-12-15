@@ -30,9 +30,9 @@ class HalfCheetahVelEnv(HalfCheetahEnv):
         super(HalfCheetahVelEnv, self).__init__()
 
     def step(self, action):
-        xposbefore = self.sim.data.qpos[0]
+        xposbefore = self.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
-        xposafter = self.sim.data.qpos[0]
+        xposafter = self.data.qpos[0]
 
         forward_vel = (xposafter - xposbefore) / self.dt
         forward_reward = -1.0 * abs(forward_vel - self._goal_vel)
@@ -44,7 +44,7 @@ class HalfCheetahVelEnv(HalfCheetahEnv):
         infos = dict(
             reward_forward=forward_reward, reward_ctrl=-ctrl_cost, task=self._task
         )
-        return observation, reward, done, infos
+        return observation, reward, done, False, infos
 
     def set_goal(self, goal):
         self._goal = np.asarray(goal)
@@ -77,9 +77,9 @@ class HalfCheetahVelEnv(HalfCheetahEnv):
         # set state to replay it (in hindsight)
         self.set_state(qpos, qvel)
 
-        xposbefore = self.sim.data.qpos[0]
+        xposbefore = self.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
-        xposafter = self.sim.data.qpos[0]
+        xposafter = self.data.qpos[0]
 
         forward_vel = (xposafter - xposbefore) / self.dt
         forward_reward = -1.0 * abs(forward_vel - self._goal_vel)

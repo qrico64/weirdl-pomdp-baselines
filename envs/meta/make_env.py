@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 
 from envs.meta.wrappers import VariBadWrapper
 from envs.parallel_env_manager import ParallelEnvManager

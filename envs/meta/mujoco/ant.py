@@ -24,7 +24,7 @@ class AntEnv(MujocoEnv):
         forward_reward = torso_velocity[0] / self.dt
         ctrl_cost = 0.0  # .5 * np.square(a).sum()
         contact_cost = (
-            0.5 * 1e-3 * np.sum(np.square(np.clip(self.sim.data.cfrc_ext, -1, 1)))
+            0.5 * 1e-3 * np.sum(np.square(np.clip(self.data.cfrc_ext, -1, 1)))
         )
         survive_reward = 0.0  # 1.0
         reward = forward_reward - ctrl_cost - contact_cost + survive_reward
@@ -36,6 +36,7 @@ class AntEnv(MujocoEnv):
             ob,
             reward,
             done,
+            False,
             dict(
                 reward_forward=forward_reward,
                 reward_ctrl=-ctrl_cost,
@@ -50,8 +51,8 @@ class AntEnv(MujocoEnv):
         # if position is needed, override this in subclasses
         return np.concatenate(
             [
-                self.sim.data.qpos.flat[2:],
-                self.sim.data.qvel.flat,
+                self.data.qpos.flat[2:],
+                self.data.qvel.flat,
             ]
         )
 

@@ -1,12 +1,17 @@
-from gym.envs.registration import load
-import gym
+import gymnasium as gym
 import numpy as np
-from gym import spaces
+from gymnasium import spaces
+import importlib
 
 
-def mujoco_wrapper(entry_point, **kwargs):
-    # Load the environment from its entry point
-    env_cls = load(entry_point)
+def load_class(entry_point: str):
+    # entry_point is "module.submodule:ClassName"
+    module_name, class_name = entry_point.split(":")
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)
+
+def mujoco_wrapper(entry_point: str, **kwargs):
+    env_cls = load_class(entry_point)
     env = env_cls(**kwargs)
     return env
 
@@ -94,7 +99,7 @@ class VariBadWrapper(gym.Wrapper):
         # reset task -- this sets goal and state -- sets self.env._goal and self.env._state
         reset_keys = set(['return_obs_type'])
         reset_task_kwargs = {k: kwargs[k] for k in kwargs.keys() - reset_keys}
-        self.env.reset_task(task, **reset_task_kwargs)
+        self.env.unwrapped.reset_task(task, **reset_task_kwargs)
 
         self.episode_count = 0
         self.step_count_bamdp = 0
@@ -102,10 +107,7 @@ class VariBadWrapper(gym.Wrapper):
         # normal reset
         return_obs_type = kwargs.get('return_obs_type', None)
         self.env.unwrapped.set_return_obs_type(return_obs_type)
-        try:
-            state = self.env.reset()
-        except AttributeError:
-            state = self.env.unwrapped.reset()
+        state = self.env.reset()
 
         self.done_mdp = False
 
@@ -139,7 +141,8 @@ class VariBadWrapper(gym.Wrapper):
         self.env.unwrapped.set_return_obs_type(return_obs_type)
 
         # do normal environment step in MDP
-        state, reward, self.done_mdp, info = self.env.step(action)
+        state, reward, terminated, truncated, info = self.env.step(action)
+        self.done_mdp = terminated or truncated
 
         info["done_mdp"] = self.done_mdp
         info["obs_return"] = self._get_obs(self.env.unwrapped.obs_return) if return_obs_type is not None else None

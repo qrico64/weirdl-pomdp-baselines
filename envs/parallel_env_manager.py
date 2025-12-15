@@ -68,7 +68,11 @@ class EnvWorker(Process):
                 elif cmd == 'get_attr':
                     # Get environment attribute
                     attr_name = data['attr']
-                    attr = getattr(self.env, attr_name)
+                    if attr_name in dir(self.env):
+                        attr = getattr(self.env, attr_name)
+                    else:
+                        assert attr_name in dir(self.env.unwrapped)
+                        attr = getattr(self.env.unwrapped, attr_name)
                     # Handle nested attributes (e.g., 'unwrapped.tasks')
                     for subattr in data.get('subattrs', []):
                         attr = getattr(attr, subattr)
