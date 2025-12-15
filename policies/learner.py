@@ -337,9 +337,7 @@ class Learner:
         self.nominal_model_config_file = nominal_model_config_file
         if self.use_nominals:
             assert self.nominal_model_config_file is not None
-            assert os.path.isabs(self.nominal_model_config_file), f"Must be absolute: {self.nominal_model_config_file}"
-            assert os.path.exists(self.nominal_model_config_file), f"Must exist: {self.nominal_model_config_file}"
-            self.nominal_model = pull_model(self.nominal_model_config_file, "latest", {}, True)
+            self.nominal_model = pull_model(self.nominal_model_config_file, "latest", {}, True, sample_env=self.train_env)
             self.nominal_trajectories = {}
             nominal_rollouts = self.nominal_model.collect_rollouts_parallel(
                 num_rollouts=len(self.goals),
@@ -357,9 +355,7 @@ class Learner:
         self.base_model_config_file = base_model_config_file
         if self.use_residuals:
             assert self.base_model_config_file is not None
-            assert os.path.isabs(self.base_model_config_file), f"Must be absolute: {self.base_model_config_file}"
-            assert os.path.exists(self.base_model_config_file), f"Must exist: {self.base_model_config_file}"
-            self.base_model = pull_model(self.base_model_config_file, "latest", {}, True)
+            self.base_model = pull_model(self.base_model_config_file, "latest", {}, True, sample_env=self.train_env)
             assert not self.base_model.use_residuals
         else:
             self.base_model = None
@@ -451,10 +447,10 @@ class Learner:
         self._start_training()
 
         # Perform initial evaluation before training for debugging
-        logger.log("Performing initial evaluation before training...")
-        initial_perf = self.log()
-        self.save_ingeneral(initial_perf)
-        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+        # logger.log("Performing initial evaluation before training...")
+        # initial_perf = self.log()
+        # self.save_ingeneral(initial_perf)
+        # logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
@@ -1767,7 +1763,31 @@ class Learner:
             logger.log(f"Failed to load from {agent_file.resolve()}: {e}")
             raise
 
-def pull_model(config_file: str, checkpoint_num: str, override_args: dict, eval_only: bool = False):
+def pull_model(config_file: str, checkpoint_num: str, override_args: dict, eval_only: bool = False, **kwargs):
+    assert config_file is not None
+    # Special case: load MetaWorld expert policy for peg-insertion
+    if config_file == "metaworld_expert_peg_insertion":
+        from envs.meta.mujoco.peg_insertion import MetaWorldExpertPolicy
+
+        sample_env = kwargs['sample_env']
+
+        # Create a minimal learner-like object with the expert policy
+        class ExpertLearner:
+            def __init__(self, obs_dim, act_dim):
+                self.agent = MetaWorldExpertPolicy(obs_dim, act_dim)
+                self.use_nominals = False
+                self.use_residuals = False
+
+        learner = ExpertLearner(
+            obs_dim=sample_env.unwrapped.env.observation_space.shape[0],
+            act_dim=sample_env.unwrapped.env.action_space.shape[0]
+        )
+        logger.log(f"Loaded MetaWorld expert policy for peg-insertion")
+        return learner
+
+    # Normal case: load trained model from checkpoint
+    assert os.path.isabs(config_file), f"Must be absolute: {config_file}"
+    assert os.path.exists(config_file), f"Must exist: {config_file}"
     assert Path(config_file).name.startswith("variant_"), f"Unable to load incorrect name: {config_file}"
     print(f"Pulling from {config_file} :")
     v = read_yaml.read_yaml_to_dict(config_file)
@@ -1780,7 +1800,7 @@ def pull_model(config_file: str, checkpoint_num: str, override_args: dict, eval_
         policy_args=utl.merge_dicts(v["policy"], override_args.get("policy", {})),
         seed=seed,
     )
-    
+
     agent_files = [fp for fp in (Path(config_file).parent / "save").iterdir() if fp.is_file() and fp.name.startswith("agent_")]
     if checkpoint_num == "latest":
         last_agent_file = max(agent_files, key=lambda fp: int(fp.name.split('_')[1]))
@@ -1790,7 +1810,7 @@ def pull_model(config_file: str, checkpoint_num: str, override_args: dict, eval_
         agent_files_exact = [fp for fp in agent_files if fp.name.startswith(f"agent_{checkpoint_num}_")]
         assert len(agent_files_exact) > 0, f"{agent_files_exact}"
         last_agent_file = agent_files_exact[0]
-    
+
     learner.load_ingeneral(last_agent_file, eval_only=eval_only)
 
     # Freeze nominal model parameters to prevent updates

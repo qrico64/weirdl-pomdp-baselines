@@ -52,6 +52,16 @@ register(
 )
 
 register(
+    "PegInsertion-v0",
+    entry_point="envs.meta.wrappers:mujoco_wrapper",
+    kwargs={
+        "entry_point": "envs.meta.mujoco.peg_insertion:PegInsertionEnv",
+        "max_episode_steps": 150,
+    },
+    max_episode_steps=150,
+)
+
+register(
     "CheetahDir-v0",
     entry_point="envs.meta.wrappers:mujoco_wrapper",
     kwargs={

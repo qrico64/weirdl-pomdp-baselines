@@ -52,16 +52,22 @@ class EnvWorker(Process):
 
                 if cmd == 'reset':
                     # data contains task information (can be None)
-                    obs = self.env.reset(**data)
+                    try:
+                        obs = self.env.reset(**data)
+                    except Exception:
+                        traceback.print_exc()
                     self.remote.send(('obs', obs))
 
                 elif cmd == 'step':
                     # data contains action
-                    obs, reward, done, info = self.env.step(**data)
+                    try:
+                        obs, reward, done, info = self.env.step(**data)
 
-                    # Check if environment has is_goal_state method (for meta-learning envs)
-                    if hasattr(self.env, 'unwrapped') and hasattr(self.env.unwrapped, 'is_goal_state'):
-                        info['is_goal_state'] = self.env.unwrapped.is_goal_state()
+                        # Check if environment has is_goal_state method (for meta-learning envs)
+                        if hasattr(self.env, 'unwrapped') and hasattr(self.env.unwrapped, 'is_goal_state'):
+                            info['is_goal_state'] = self.env.unwrapped.is_goal_state()
+                    except Exception:
+                        traceback.print_exc()
 
                     self.remote.send(('transition', (obs, reward, done, info)))
 
@@ -84,10 +90,14 @@ class EnvWorker(Process):
                     break
 
                 elif cmd == 'seed':
-                    seed_value = data['seed']
-                    self.env.seed(seed_value)
-                    if hasattr(self.env, 'action_space'):
-                        self.env.action_space.np_random.seed(seed_value)
+                    try:
+                        seed_value = data['seed']
+                        self.env.seed(seed_value)
+                        if hasattr(self.env, 'action_space'):
+                            self.env.action_space.np_random.seed(seed_value)
+                    except Exception:
+                        traceback.print_exc()
+
                     self.remote.send(('done', None))
 
                 else:

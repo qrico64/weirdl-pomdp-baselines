@@ -108,6 +108,8 @@ class VariBadWrapper(gym.Wrapper):
         return_obs_type = kwargs.get('return_obs_type', None)
         self.env.unwrapped.set_return_obs_type(return_obs_type)
         state = self.env.reset()
+        if isinstance(state, tuple) and len(state) == 2 and isinstance(state[1], dict):
+            state = state[0]
 
         self.done_mdp = False
 
@@ -125,6 +127,8 @@ class VariBadWrapper(gym.Wrapper):
     def reset_mdp(self):
         state = self.env.reset()
         self.done_mdp = False
+        if isinstance(state, tuple) and len(state) == 2 and isinstance(state[1], dict):
+            state = state[0]
 
         return self._get_obs(state)
 
