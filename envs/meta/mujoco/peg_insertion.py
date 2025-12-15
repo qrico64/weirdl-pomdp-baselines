@@ -31,7 +31,7 @@ class PegInsertionEnv(gym.Env, Serializable):
         num_train_tasks:int=3,
         num_eval_tasks:int=20,
         max_episode_steps=150,
-        task_mode: Literal["fixed", "random_peg", "random_target"] = "fixed",
+        task_mode: Literal["fixed", "random_peg", "random_target", "random_both"] = "fixed",
         reward_conditioning: Literal["no", "yes"] = "no",
         goal_conditioning: Literal["no", "yes_target", "yes_peg", "yes_both"] = "no",
         goal_noise_magnitude: float = 0,
@@ -63,7 +63,12 @@ class PegInsertionEnv(gym.Env, Serializable):
 
         self.action_space = self.env.action_space
         assert isinstance(self.env.observation_space, gym.spaces.Box)
-        L = (3 if 'target' in self.goal_conditioning else 0) + (3 if 'peg' in self.goal_conditioning else 0)
+        L = {
+            'fixed': 0,
+            'yes_peg': 3,
+            'yes_target': 3,
+            'yes_both': 6,
+        }[self.goal_conditioning]
         low = np.full((self.env.observation_space.shape[0] + L,), -np.inf, dtype=self.env.observation_space.dtype)
         high = np.full((self.env.observation_space.shape[0] + L,), np.inf, dtype=self.env.observation_space.dtype)
         self.observation_space = gym.spaces.Box(low, high, dtype=self.env.observation_space.dtype)
@@ -107,11 +112,9 @@ class PegInsertionEnv(gym.Env, Serializable):
         self._task = None
         self._goal = None
         if self.infinite_tasks == "yes":
-            self.goals = []
-            self.tasks = []
-            return
-
-        if self.task_mode == "fixed":
+            self.train_goals = np.zeros((self.num_train_tasks, 6), dtype=np.float32)
+            self.eval_goals = np.zeros((self.num_eval_tasks, 6), dtype=np.float32)
+        elif self.task_mode == "fixed":
             self.train_goals = np.tile(np.concatenate([self.bounds['default_peg_reset_pos'], self.bounds['default_target_reset_pos']]), (self.num_train_tasks, 1))
             self.eval_goals = np.tile(np.concatenate([self.bounds['default_peg_reset_pos'], self.bounds['default_target_reset_pos']]), (self.num_eval_tasks, 1))
         elif self.task_mode == "random_peg":
@@ -126,6 +129,16 @@ class PegInsertionEnv(gym.Env, Serializable):
         elif self.task_mode == "random_target":
             goals_target = init_tasks_deterministic_random(self.n_tasks, self.bounds['target_bounds']['low'], self.bounds['target_bounds']['high'])
             goals = np.concatenate([np.tile(self.bounds['default_peg_reset_pos'][None,:], (self.n_tasks, 1)), goals_target], axis=1)
+
+            assignment = np.zeros((self.n_tasks,), dtype=bool)
+            assignment[np.round(np.linspace(0, self.n_tasks, self.num_eval_tasks, endpoint=False)).astype(np.int32)] = True
+
+            self.train_goals = goals[np.logical_not(assignment)]
+            self.eval_goals = goals[assignment]
+        elif self.task_mode == "random_both":
+            goals_peg = init_tasks_deterministic_random(self.n_tasks, self.bounds['peg_bounds']['low'], self.bounds['peg_bounds']['high'])
+            goals_target = init_tasks_deterministic_random(self.n_tasks, self.bounds['target_bounds']['low'], self.bounds['target_bounds']['high'])
+            goals = np.concatenate([goals_peg, goals_target], axis=1)
 
             assignment = np.zeros((self.n_tasks,), dtype=bool)
             assignment[np.round(np.linspace(0, self.n_tasks, self.num_eval_tasks, endpoint=False)).astype(np.int32)] = True
@@ -194,6 +207,9 @@ class PegInsertionEnv(gym.Env, Serializable):
             target = self.bounds['default_target_reset_pos']
         elif self.task_mode == "random_target":
             peg = self.bounds['default_peg_reset_pos']
+            target = np.random.uniform(self.bounds['target_bounds']['low'], self.bounds['target_bounds']['high'])
+        elif self.task_mode == "random_both":
+            peg = np.random.uniform(self.bounds['peg_bounds']['low'], self.bounds['peg_bounds']['high'])
             target = np.random.uniform(self.bounds['target_bounds']['low'], self.bounds['target_bounds']['high'])
         else:
             raise NotImplementedError()

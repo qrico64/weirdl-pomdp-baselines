@@ -1,0 +1,1 @@
+salloc -A cse -p gpu-l40s --mem=40GB --time=8:00:00 --gpus=1 --cpus-per-task=16

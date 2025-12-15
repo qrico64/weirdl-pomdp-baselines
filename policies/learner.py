@@ -421,10 +421,10 @@ class Learner:
         self._start_training()
 
         # Perform initial evaluation before training for debugging
-        logger.log("Performing initial evaluation before training...")
-        initial_perf = self.log()
-        self.save_ingeneral(initial_perf)
-        logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
+        # logger.log("Performing initial evaluation before training...")
+        # initial_perf = self.log()
+        # self.save_ingeneral(initial_perf)
+        # logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
             logger.log("Collecting initial pool of data..")
@@ -569,9 +569,7 @@ class Learner:
 
             while not done_rollout:
                 if random_actions:
-                    action = ptu.FloatTensor(
-                        [self.train_env.action_space.sample()]
-                    )  # (1, A) for continuous action, (1) for discrete action
+                    action = ptu.FloatTensor(np.array([self.train_env.action_space.sample()])) # (1, A) for continuous action, (1) for discrete action
                     if not self.act_continuous:
                         action = F.one_hot(
                             action.long(), num_classes=self.act_dim
@@ -782,7 +780,6 @@ class Learner:
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
                 worker_buffers['list_len'][worker_id] += 1
 
-        goals = set()
         # act_times = [[], [], []]
         # Main loop: collect rollouts until all workers are done
         while any(ws['remaining_rollouts'] > 0 or ws['active'] for ws in worker_states.values()):
@@ -797,7 +794,7 @@ class Learner:
             if random_actions:
                 # Random actions: no batching needed, sample independently
                 for worker_id in active_workers:
-                    action = ptu.FloatTensor([parallel_env.action_space.sample()])
+                    action = ptu.FloatTensor(np.array([parallel_env.action_space.sample()]))
                     if not self.act_continuous:
                         action = F.one_hot(action.long(), num_classes=self.act_dim).float()
                     worker_actions[worker_id] = action
@@ -893,11 +890,10 @@ class Learner:
             for worker_id in worker_actions.keys():
                 msg_type, (next_obs_np, reward_np, done_np, info) = parallel_env.remotes[worker_id].recv()
                 assert msg_type == 'transition'
-                goals.add((next_obs_np[-2], next_obs_np[-1]))
 
                 # Convert to torch tensors (matching utl.env_step format)
                 next_obs = ptu.from_numpy(next_obs_np).view(-1, next_obs_np.shape[0])
-                reward = ptu.FloatTensor([reward_np]).view(-1, 1)
+                reward = ptu.FloatTensor(np.array([reward_np])).view(-1, 1)
                 done = ptu.from_numpy(np.array(done_np, dtype=int)).view(-1, 1)
 
                 worker_transitions[worker_id] = (next_obs, reward, done, info, worker_actions[worker_id])
@@ -981,12 +977,12 @@ class Learner:
                             nominals = nominals,
                         )
 
-                        # print(
-                        #     f"worker_{worker_id} steps: {state['steps']} term: {term} "
-                        #     f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
-                        #     f" step: {worker_buffers['list_len'][worker_id]}"
-                        #     + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
-                        # )
+                        print(
+                            f"worker_{worker_id} steps: {state['steps']} term: {term} "
+                            f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
+                            f" step: {worker_buffers['list_len'][worker_id]}"
+                            + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
+                        )
 
                     # Update statistics
                     self._n_env_steps_total += state['steps']
@@ -1044,7 +1040,6 @@ class Learner:
         # act_times_avg = np.array(act_times).mean(axis=1)
         # print(act_times_avg)
         print(f"Ending collection...")
-        logger.log(f"Traversed goals: {goals}")
         # breakpoint()
         return self._n_env_steps_total - before_env_steps
 
@@ -1060,7 +1055,7 @@ class Learner:
         rl_losses_agg = {}
         for update in range(num_updates):
             if update % 40 == 0 or update == num_updates - 1:
-                print(f"Updated {update}/{num_updates} times.")
+                logger.log(f"Updated {update}/{num_updates} times.")
             # sample random RL batch: in transitions
             batch = self.sample_rl_batch(self.batch_size)
 
@@ -1159,11 +1154,12 @@ class Learner:
                         batch_obs = torch.cat(obss, dim=0).unsqueeze(dim=1)
                         batch_prev_actions = torch.cat(actions, dim=0).unsqueeze(dim=1)
                         batch_rewards = torch.cat(rewards, dim=0).unsqueeze(dim=1)
+                        batch_lengths = ptu.FloatTensor(np.array([batch_obs.shape[0]])).to(dtype=torch.int64)
                         batch_actions, _, _, _ = self.agent.act(
                             prev_actions=batch_prev_actions,
                             obs=batch_obs,
                             rewards=batch_rewards,
-                            lengths=ptu.FloatTensor([batch_obs.shape[0]]).to(dtype=torch.int64),
+                            lengths=batch_lengths,
                             deterministic=deterministic
                         )
                         action = batch_actions
