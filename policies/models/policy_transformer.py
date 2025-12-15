@@ -242,7 +242,8 @@ class ModelFreeOffPolicy_Transformer(nn.Module):
         )
 
         self.critic_optimizer.zero_grad()
-        (qf1_loss + qf2_loss).backward()
+        q_loss = qf1_loss + qf2_loss
+        q_loss.backward()
         self.critic_optimizer.step()
 
         ### 2. Actor loss

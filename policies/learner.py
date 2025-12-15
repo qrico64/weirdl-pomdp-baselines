@@ -30,6 +30,8 @@ from utils import evaluation as utl_eval
 from utils import logger
 from envs.parallel_env_manager import ParallelEnvManager
 
+from scripts import render
+
 
 class Learner:
     def __init__(self, env_args, train_args, eval_args, policy_args, seed, **kwargs):
@@ -66,6 +68,9 @@ class Learner:
         eval_env: dict = {},
         **kwargs
     ):
+        assert num_tasks is not None
+        assert num_tasks == num_train_tasks + num_eval_tasks
+        self.n_tasks = num_tasks
 
         # initialize environment
         assert env_type in [
@@ -107,14 +112,13 @@ class Learner:
             self.eval_env = make_env(
                 env_name,
                 max_rollouts_per_task,
-                seed=self.seed,
+                seed=self.seed + 300,
                 num_train_tasks=num_train_tasks,
                 num_eval_tasks=num_eval_tasks,
                 **{**kwargs, **eval_env},
             )
-            self.eval_env.seed(self.seed + 1)
 
-            if self.train_env.n_tasks is not None:
+            if self.n_tasks is not None:
                 # NOTE: This is off-policy varibad's setting, i.e. limited training tasks
                 # split to train/eval tasks
                 self.train_tasks = np.arange(0, num_train_tasks)
@@ -449,6 +453,7 @@ class Learner:
         # Perform initial evaluation before training for debugging
         logger.log("Performing initial evaluation before training...")
         initial_perf = self.log()
+        self.save_ingeneral(initial_perf)
         logger.log(f"Initial evaluation complete. Performance: {initial_perf:.3f}")
 
         if self.num_init_rollouts_pool > 0:
@@ -1157,6 +1162,8 @@ class Learner:
         success_rate = np.zeros(len(tasks))
         total_steps = np.zeros(len(tasks))
 
+        frames = []
+
         if self.use_nominals:
             nominal_trajectories = self.nominal_model.collect_rollouts_parallel(
                 num_rollouts=len(tasks),
@@ -1169,7 +1176,7 @@ class Learner:
 
         if self.env_type == "meta":
             num_steps_per_episode = self.eval_env.unwrapped._max_episode_steps  # H
-            obs_size = self.eval_env.unwrapped.observation_space.shape[
+            obs_size = self.eval_env.observation_space.shape[
                 0
             ]  # original size
             observations = np.zeros((len(tasks), self.max_trajectory_len + 1, obs_size))
@@ -1196,9 +1203,12 @@ class Learner:
                 rewards += list(ptu.from_numpy(nominal_trajectory['rewards']).unsqueeze(1))
                 nominals += [0 for _ in range(len(nominal_trajectory['rewards']))]
 
-            if self.env_type == "meta" and self.eval_env.n_tasks is not None:
+            if self.env_type == "meta" and self.n_tasks is not None:
                 obs = ptu.from_numpy(self.eval_env.reset(task=task))  # reset task
                 observations[task_idx, step, :] = ptu.get_numpy(obs[:obs_size])
+                # frame = self.eval_env.render()
+                # assert frame.ndim == 3 and frame.shape[-1] == 3 and frame.shape[0] <= 128 and frame.shape[1] <= 128
+                # frames.append(frame)
             else:
                 obs = ptu.from_numpy(self.eval_env.reset())  # reset
 
@@ -1279,6 +1289,8 @@ class Learner:
                     next_obs, reward, done, info = utl.env_step(
                         self.eval_env, action.squeeze(dim=0)
                     )
+                    # frame = self.eval_env.render()
+                    # frames.append(frame)
 
                     # clip reward if necessary for policy inputs
                     if self.reward_clip and self.env_type == "atari":
@@ -1333,6 +1345,7 @@ class Learner:
             total_steps[task_idx] = step
             to_log = f"""\nTask {task} ({task_idx}) ({self.eval_env.unwrapped.annotation() if 'annotation' in dir(self.eval_env.unwrapped) else ''}):\n{episodes_infos}\n{episodes_infos_rewards}\n"""
             logger.log(to_log)
+        # frames = render.stack_frames(frames)
         
         return returns_per_episode, success_rate, observations, total_steps
 
@@ -1363,7 +1376,7 @@ class Learner:
 
         # --- evaluation ----
         if self.env_type == "meta":
-            if self.train_env.n_tasks is not None:
+            if self.n_tasks is not None:
                 (
                     returns_train,
                     success_rate_train,
@@ -1384,7 +1397,7 @@ class Learner:
                     total_steps_eval_sto,
                 ) = self.evaluate(self.goals[self.eval_tasks], deterministic=False)
 
-            if self.train_env.n_tasks is not None and "plot_behavior" in dir(
+            if self.n_tasks is not None and "plot_behavior" in dir(
                 self.eval_env.unwrapped
             ):
                 # plot goal-reaching trajs
@@ -1421,7 +1434,7 @@ class Learner:
                     "metrics/successes_in_buffer",
                     self._successes_in_buffer / (self._n_env_steps_total + 1),
                 )
-                if self.train_env.n_tasks is not None:
+                if self.n_tasks is not None:
                     logger.record_tabular(
                         "metrics/success_rate_train", np.mean(success_rate_train)
                     )
@@ -1434,7 +1447,7 @@ class Learner:
                     )
 
             for episode_idx in range(self.max_rollouts_per_task):
-                if self.train_env.n_tasks is not None:
+                if self.n_tasks is not None:
                     logger.record_tabular(
                         "metrics/return_train_episode_{}".format(episode_idx + 1),
                         np.mean(returns_train[:, episode_idx]),
@@ -1449,7 +1462,7 @@ class Learner:
                         np.mean(returns_eval_sto[:, episode_idx]),
                     )
 
-            if self.train_env.n_tasks is not None:
+            if self.n_tasks is not None:
                 logger.record_tabular(
                     "metrics/total_steps_train", np.mean(total_steps_train)
                 )
@@ -1650,6 +1663,13 @@ class Learner:
         logger.log(f"policy_storage size: {self.policy_storage.size()}")
         logger.log(f"buffer_save_path: {buffer_save_path}")
 
+        # video_save_path = os.path.join(save_dir, f"video_{current_num_iters}_perf{log_perf:.3f}.mp4")
+        # assert self.frames_train is not None and self.frames_eval is not None
+        # frames = np.concatenate([self.frames_train, self.frames_eval], axis=0)
+        # end_video_save_path = render.write_video_mp4(frames, 30, video_save_path)
+        # logger.log(f"video size: {frames.shape}")
+        # logger.log(f"video_save_path: {end_video_save_path}")
+
         logger.log("****** Saved Model ******\n")
 
         # Clean up old checkpoints: keep checkpoints divisible by save_interval OR last 3
@@ -1706,7 +1726,7 @@ class Learner:
             logger.log("Loaded agent model")
 
             # Load optimizer(s)
-            optimizer_states = torch.load(optimizer_file, map_location=ptu.device)
+            optimizer_states = torch.load(optimizer_file, map_location=ptu.device, weights_only=False)
             for attr_name, state_dict in optimizer_states.items():
                 if hasattr(self.agent, attr_name):
                     optimizer = getattr(self.agent, attr_name)
@@ -1715,7 +1735,7 @@ class Learner:
             logger.log(f"Loaded optimizers: {list(optimizer_states.keys())}")
 
             # Load learner state
-            learner_state = torch.load(learner_file, map_location=ptu.device)
+            learner_state = torch.load(learner_file, map_location=ptu.device, weights_only=False)
             self._n_env_steps_total = learner_state['n_env_steps_total']
             self._n_env_steps_total_last = learner_state['n_env_steps_total_last']
             self._n_rl_update_steps_total = learner_state['n_rl_update_steps_total']
@@ -1732,7 +1752,7 @@ class Learner:
             np.random.set_state(learner_state['random_state'])
             # Ensure torch_rng_state is on CPU before setting it
             torch.set_rng_state(utl.ensure_cpu_tensor(learner_state['torch_rng_state']))
-            if torch.cuda.is_available() and learner_state['torch_cuda_rng_state'] is not None:
+            if torch.cuda.is_available() and learner_state['torch_cuda_rng_state'] is not None and learner_state['torch_cuda_rng_state'][0].shape == torch.cuda.get_rng_state().shape:
                 torch.cuda.set_rng_state_all(utl.ensure_cpu_tensor(learner_state['torch_cuda_rng_state']))
             logger.log("Restored RNG states")
 

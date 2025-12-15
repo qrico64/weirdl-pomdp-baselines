@@ -11,10 +11,10 @@ def make_env(env_id, episodes_per_task, seed=None, oracle=False, **kwargs):
     """
     kwargs: include n_tasks=num_tasks
     """
-    env = gym.make(env_id, **kwargs)
+    env = gym.make(env_id, seed=seed, **kwargs)
     if seed is not None:
-        env.seed(seed)
-        env.action_space.np_random.seed(seed)
+        # env.unwrapped.seed(seed)
+        env.action_space.seed(seed)
     env = VariBadWrapper(
         env=env,
         episodes_per_task=episodes_per_task,
