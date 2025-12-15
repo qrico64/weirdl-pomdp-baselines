@@ -2,17 +2,17 @@ seed: 40
 cuda: 0 # use_gpu
 env:
   env_type: meta
-  env_name: AntGoal-v0
+  env_name: PegInsertion-v0
   max_rollouts_per_task: 2 # k=2, H=200, H^+ =400
 
   num_tasks: 36
   num_train_tasks: 16
   num_eval_tasks: 20
-  task_mode: circle_down_up
+  task_mode: fixed
   reward_conditioning: no
-  goal_conditioning: no
+  goal_conditioning: yes_both
   normalize_kwarg: true
-  num_parallel_workers: 30
+  num_parallel_workers: 20
   reward_scale: 2.0
   goal_radius: 0.4
   infinite_tasks: yes
@@ -28,8 +28,8 @@ train:
     # now makes it same as env steps
   num_iters: 3000
   num_init_rollouts_pool: 50 # before training
-  num_rollouts_per_iter: 30  #
-  buffer_size: 3e6
+  num_rollouts_per_iter: 20  #
+  buffer_size: 9e6
 
   num_updates_per_iter: 0.01 # equal, or positive integer
   batch_size: 18 # to tune based on sampled_seq_len
@@ -37,7 +37,13 @@ train:
   sample_weight_baseline: 0.0
 
   use_residuals: true
-  base_model_config_file: /mmfs1/gscratch/weirdlab/qirico/Meta-Learning-25-10-1/weirdl-pomdp-baselines-cp38/experiments/dec8/dec8_278a84a_circle_combined2_nogoal__3/variant_65924_31733374.yml
+  base_model_config_file: metaworld_expert_peg_insertion
+
+  # Data collection mode - if true, just collect data using base_model, no training
+  collect_data_only: true
+  num_data_collection_rollouts: 1000  # total rollouts to collect in data-only mode
+  data_collection_action_noise: 0.0  # std of Gaussian noise added to base policy actions
+  data_collection_save_interval: 20  # save buffer every k rollouts
 
 eval:
   eval_stochastic: false # also eval stochastic policy
