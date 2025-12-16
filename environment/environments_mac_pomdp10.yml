@@ -54,27 +54,11 @@ dependencies:
       - metaworld==3.0.0
       - mujoco==3.3.7
       - numpy
-      - nvidia-cublas
-      - nvidia-cuda-cupti
-      - nvidia-cuda-nvrtc
-      - nvidia-cuda-runtime
-      - nvidia-cudnn-cu13
-      - nvidia-cufft
-      - nvidia-cufile
-      - nvidia-curand
-      - nvidia-cusolver
-      - nvidia-cusparse
-      - nvidia-cusparselt-cu13
-      - nvidia-nccl-cu13
-      - nvidia-nvjitlink
-      - nvidia-nvshmem-cu13
-      - nvidia-nvtx
       - pyopengl
       - pyopengl-accelerate
-      - torch==2.9.1+cu130
-      - torchvision==0.24.1+cu130
+      - torch
+      - torchvision
       - tqdm
-      - triton
       - zipp
 variables:
   MUJOCO_GL: egl
