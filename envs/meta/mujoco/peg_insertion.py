@@ -7,7 +7,6 @@ import imageio
 import os
 import cv2
 from torchkit import pytorch_utils as ptu
-os.environ['MUJOCO_GL'] = 'egl'
 
 from .core.serializable import Serializable
 
