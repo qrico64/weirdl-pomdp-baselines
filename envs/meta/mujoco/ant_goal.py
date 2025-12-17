@@ -38,6 +38,7 @@ class AntGoalEnv(MultitaskAntEnv):
         self.num_eval_tasks = num_eval_tasks
         self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
+        self.goal_conditioning_view = ["no", "yes", "fixed_noise", "yes_relative", "yes_relative_noise"]
         self.goal_noise_magnitude = goal_noise_magnitude
         self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
@@ -45,8 +46,6 @@ class AntGoalEnv(MultitaskAntEnv):
         self.normalize_kwarg = normalize_kwarg
         self.reward_scale = reward_scale
         self.goal_radius = goal_radius
-
-        self.return_obs_type = None
 
         logger.log()
         logger.log("****** Creating AntGoal Environment ******")
@@ -69,12 +68,11 @@ class AntGoalEnv(MultitaskAntEnv):
         obs_dim = 27 + (2 if self.goal_conditioning != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float64)
     
-    def set_return_obs_type(self, return_obs_type):
-        self.return_obs_type = return_obs_type
-    
     def reset(self, **kwargs):
         obs = super(AntGoalEnv, self).reset(**kwargs)
-        return self._get_obs()
+        info = {}
+        obs, info["obs"] = self._get_obs2(obs)
+        return obs, info
 
     def step(self, action):
         torso_xyz_before = np.array(self.get_body_com("torso"))
@@ -96,19 +94,22 @@ class AntGoalEnv(MultitaskAntEnv):
         state = self.state_vector()
         notdone = np.isfinite(state).all() and state[2] >= 0.2 and state[2] <= 1.0
         done = not notdone
-        ob = self._get_obs(reward)
+
+        info = dict(
+            reward_forward=forward_reward,
+            reward_ctrl=-ctrl_cost,
+            reward_contact=-contact_cost,
+            reward_survive=survive_reward,
+            torso_velocity=torso_velocity,
+        )
+        obs = super(AntGoalEnv, self)._get_obs()
+        obs, info["obs"] = self._get_obs2(obs, reward=reward)
         return (
-            ob,
+            obs,
             reward,
             done,
             False,
-            dict(
-                reward_forward=forward_reward,
-                reward_ctrl=-ctrl_cost,
-                reward_contact=-contact_cost,
-                reward_survive=survive_reward,
-                torso_velocity=torso_velocity,
-            ),
+            info,
         )
 
     def _append_obs_raw(self, obs, reward=0.0, return_obs_type=None):
@@ -147,16 +148,13 @@ class AntGoalEnv(MultitaskAntEnv):
         
         return obs
 
-    def _get_obs(self, reward=0.0):
-        obs = super(AntGoalEnv, self)._get_obs()
-        regular_obs = self._append_obs_raw(obs, reward=reward, return_obs_type=self.goal_conditioning)
+    def _get_obs2(self, obs, reward=0.0):
+        info = {k: self._append_obs_raw(obs, reward=reward, return_obs_type=k) for k in self.goal_conditioning_view}
+        return self._append_obs_raw(obs, reward=reward, return_obs_type=self.goal_conditioning), info
 
-        if self.return_obs_type is not None:
-            self.obs_return = self._append_obs_raw(obs, reward=reward, return_obs_type=self.return_obs_type)
-        else:
-            self.obs_return = None
-        
-        return regular_obs
+    def _get_obs(self):
+        obs = super(AntGoalEnv, self)._get_obs()
+        return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning)
 
     def sample_tasks(self, num_tasks):
         assert self.task_mode is not None, f"{self.task_mode}"
@@ -268,7 +266,7 @@ class AntGoalEnv(MultitaskAntEnv):
         
     def obs_dim(self, return_obs_type=None):
         assert return_obs_type is not None
-        return 28 + (2 if return_obs_type != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
+        return 27 + (2 if return_obs_type != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
 
     def annotation(self) -> str:
         info = {

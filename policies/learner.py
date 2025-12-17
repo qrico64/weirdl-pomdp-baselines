@@ -622,7 +622,7 @@ class Learner:
             'list_len': np.zeros((num_workers, ), dtype=np.int64),
         }
         if return_obs_type is not None:
-            obs_return_list_dim = self.train_env.unwrapped.obs_dim(return_obs_type=return_obs_type)
+            obs_return_list_dim = self.train_env.obs_dim(return_obs_type=return_obs_type)
             worker_buffers['obs_return_list'] = np.zeros((num_workers, self.max_trajectory_len+1, obs_return_list_dim), dtype=np.float32)
         if self.use_residuals:
             worker_buffers['base_act_list'] = np.zeros((num_workers, self.max_trajectory_len+1, self.act_dim), dtype=np.float32)
@@ -657,14 +657,12 @@ class Learner:
             else:
                 task = None
             worker_states[worker_id]['task'] = task
-            parallel_env.remotes[worker_id].send(('reset', {'task': task, 'return_obs_type': return_obs_type}))
+            parallel_env.remotes[worker_id].send(('reset', {'task': task}))
 
         # Collect ALL reset responses (workers reset in parallel)
         for worker_id in worker_states.keys():
-            msg_type, obs_np = parallel_env.remotes[worker_id].recv()
+            msg_type, (obs_np, info) = parallel_env.remotes[worker_id].recv()
             assert msg_type == 'obs'
-            if return_obs_type is not None:
-                obs_np, obs_return_np = obs_np
 
             obs = ptu.from_numpy(obs_np).reshape(1, obs_np.shape[-1])
             worker_states[worker_id]['obs'] = obs
@@ -702,7 +700,7 @@ class Learner:
                 worker_states[worker_id]['internal_state'] = internal_state
                 worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
                 if return_obs_type is not None:
-                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = obs_return_np
+                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
                 worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
                 worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
@@ -715,8 +713,8 @@ class Learner:
                 action, reward = self.rollout_agent.get_initial_info()
                 worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(obs[0])
                 if return_obs_type is not None:
-                    assert not ptu.isnan(obs_return_np)
-                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = obs_return_np
+                    assert not ptu.isnan(info['obs'][return_obs_type])
+                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
                 worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
                 worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
                 worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = 0
@@ -860,7 +858,7 @@ class Learner:
                     action_np = np.argmax(action_np)
 
                 # Non-blocking send: returns immediately, worker starts step() in parallel
-                parallel_env.remotes[worker_id].send(('step', {'action': action_np, 'return_obs_type': return_obs_type}))
+                parallel_env.remotes[worker_id].send(('step', {'action': action_np}))
 
             # PHASE 3: Collect results from ALL active workers (blocking)
             # Workers have been computing in parallel, now we collect their results
@@ -881,9 +879,6 @@ class Learner:
                 state = worker_states[worker_id]
                 obs = state['obs']
                 assert not ptu.isnan(next_obs)
-                if return_obs_type is not None:
-                    next_obs_return_np = info['obs_return']
-                    assert not ptu.isnan(next_obs_return_np)
 
                 # Clip reward if needed
                 if self.reward_clip and self.env_type == "atari":
@@ -936,9 +931,8 @@ class Learner:
                     worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
                     worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
                     if return_obs_type is not None:
-                        assert next_obs_return_np is not None
-                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = next_obs_return_np
-                        assert not ptu.isnan(next_obs_return_np)
+                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
+                        assert not ptu.isnan(info['obs'][return_obs_type])
                     if self.use_residuals:
                         worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
                     worker_buffers['list_len'][worker_id] += 1
@@ -949,9 +943,8 @@ class Learner:
                     worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
                     worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
                     if return_obs_type is not None:
-                        assert next_obs_return_np is not None
-                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = next_obs_return_np
-                        assert not ptu.isnan(next_obs_return_np)
+                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
+                        assert not ptu.isnan(info['obs'][return_obs_type])
                     if self.use_residuals:
                         worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
                     worker_buffers['list_len'][worker_id] += 1

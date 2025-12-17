@@ -144,6 +144,7 @@ class PegInsertionEnv(gym.Env, Serializable):
         self.n_tasks = self.num_train_tasks + self.num_eval_tasks
         self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
+        self.goal_conditioning_view = ["no", "yes_target", "yes_peg", "yes_both"]
         self.goal_noise_magnitude = goal_noise_magnitude
         self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
@@ -180,7 +181,6 @@ class PegInsertionEnv(gym.Env, Serializable):
 
         self._last_obs = None
         self._last_success = False
-        self.return_obs_type = None
 
         super(PegInsertionEnv, self).__init__()
         self.init_consts()
@@ -257,12 +257,13 @@ class PegInsertionEnv(gym.Env, Serializable):
         self._last_success = False
         self._set_peg_pos(self._task['peg_pos'])
         self._set_target_pos(self._task['target_pos'])
-        return self._get_obs(), info
+        obs, info["obs"] = self._get_obs2(obs)
+        return obs, info
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         self._last_success = info.get('success', False)
-        obs = self._append_obs_raw2(obs)
+        obs, info["obs"] = self._get_obs2(obs)
         return (
             obs,
             reward,
@@ -280,27 +281,18 @@ class PegInsertionEnv(gym.Env, Serializable):
         elif return_obs_type == "yes_both":
             obs = np.concatenate([obs, target_goal], axis=0)
         elif return_obs_type == "no":
-            pass
+            obs = np.copy(obs)
         else:
             raise NotImplementedError(f"Unidentified goal conditioning: {return_obs_type}")
         return obs
     
-    def _append_obs_raw2(self, obs):
-        obs = self._append_obs_raw(obs, return_obs_type=self.goal_conditioning)
-        self._last_obs = obs
-
-        if self.return_obs_type is not None:
-            self.obs_return = self._append_obs_raw(obs, return_obs_type=self.return_obs_type)
-        else:
-            self.obs_return = None
-        
-        return obs
+    def _get_obs2(self, obs):
+        info = {k: self._append_obs_raw(obs, return_obs_type=k) for k in self.goal_conditioning_view}
+        return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning), info
 
     def _get_obs(self):
         obs = self.env.unwrapped._get_obs()
-        obs = self._append_obs_raw2(obs)
-        
-        return obs
+        return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning)
 
     def train_task_distribution(self):
         if self.task_mode == "fixed":
@@ -371,9 +363,6 @@ class PegInsertionEnv(gym.Env, Serializable):
         Uses the success value from the last step's info dict.
         """
         return self._last_success
-
-    def set_return_obs_type(self, return_obs_type):
-        self.return_obs_type = return_obs_type
 
     def __getstate__(self):
         """Save only initialization parameters for serialization."""
