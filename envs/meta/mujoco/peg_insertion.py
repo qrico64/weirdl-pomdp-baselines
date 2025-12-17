@@ -123,8 +123,7 @@ class PegInsertionEnv(gym.Env, Serializable):
         num_eval_tasks:int=20,
         max_episode_steps=150,
         task_mode: Literal["fixed", "random_peg", "random_target", "random_both"] = "fixed",
-        reward_conditioning: Literal["no", "yes"] = "no",
-        goal_conditioning: Literal["no", "yes_target", "yes_peg", "yes_both"] = "no",
+        goal_conditioning: str = "no",
         goal_noise_magnitude: float = 0,
         goal_noise_type: Literal["normal", "uniform", "constrained_normal"] = "normal",
         infinite_tasks: Literal["no", "yes"] = "no",
@@ -136,15 +135,16 @@ class PegInsertionEnv(gym.Env, Serializable):
         Serializable.quick_init(self, locals())
 
         assert seed is not None, f"{seed}"
+        assert len(kwargs) == 0
         self.seed = seed
         self._max_episode_steps = max_episode_steps
         self.task_mode = task_mode
         self.num_train_tasks = num_train_tasks
         self.num_eval_tasks = num_eval_tasks
         self.n_tasks = self.num_train_tasks + self.num_eval_tasks
-        self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
         self.goal_conditioning_view = ["no", "yes_target", "yes_peg", "yes_both"]
+        self.goal_conditioning_view += [cond + "/reward" for cond in self.goal_conditioning_view]
         self.goal_noise_magnitude = goal_noise_magnitude
         self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
@@ -171,6 +171,7 @@ class PegInsertionEnv(gym.Env, Serializable):
         logger.log(f"num_eval_tasks: {self.num_eval_tasks}")
         logger.log(f"task_mode: {self.task_mode}")
         logger.log(f"goal_conditioning: {self.goal_conditioning}")
+        logger.log(f"goal_conditioning_view: {self.goal_conditioning_view}")
         logger.log(f"goal_noise_magnitude: {self.goal_noise_magnitude}")
         logger.log(f"goal_noise_type: {self.goal_noise_type}")
         logger.log(f"infinite_tasks: {self.infinite_tasks}")
@@ -181,6 +182,7 @@ class PegInsertionEnv(gym.Env, Serializable):
 
         self._last_obs = None
         self._last_success = False
+        self._last_reward = 0.0
 
         super(PegInsertionEnv, self).__init__()
         self.init_consts()
@@ -255,6 +257,7 @@ class PegInsertionEnv(gym.Env, Serializable):
     def reset(self, **kwargs):
         obs, info = self.env.reset(seed=self.seed)
         self._last_success = False
+        self._last_reward = 0.0
         self._set_peg_pos(self._task['peg_pos'])
         self._set_target_pos(self._task['target_pos'])
         obs, info["obs"] = self._get_obs2(obs)
@@ -263,6 +266,8 @@ class PegInsertionEnv(gym.Env, Serializable):
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         self._last_success = info.get('success', False)
+        self._last_reward = reward
+        self._last_obs = obs
         obs, info["obs"] = self._get_obs2(obs)
         return (
             obs,
@@ -273,17 +278,30 @@ class PegInsertionEnv(gym.Env, Serializable):
         )
 
     def _append_obs_raw(self, obs, return_obs_type):
+        if '/' in return_obs_type:
+            cur_goal_condition, cur_reward_condition = return_obs_type.split('/')
+        else:
+            cur_goal_condition, cur_reward_condition = return_obs_type, None
+        
         target_goal = self._goal + self._goal_noise
-        if return_obs_type == "yes_peg":
+        if cur_goal_condition == "yes_peg":
             obs = np.concatenate([obs, target_goal[:3]], axis=0)
-        elif return_obs_type == "yes_target":
+        elif cur_goal_condition == "yes_target":
             obs = np.concatenate([obs, target_goal[3:]], axis=0)
-        elif return_obs_type == "yes_both":
+        elif cur_goal_condition == "yes_both":
             obs = np.concatenate([obs, target_goal], axis=0)
-        elif return_obs_type == "no":
+        elif cur_goal_condition == "no":
             obs = np.copy(obs)
         else:
-            raise NotImplementedError(f"Unidentified goal conditioning: {return_obs_type}")
+            raise NotImplementedError(f"Unidentified goal conditioning: {cur_goal_condition}")
+        
+        if cur_reward_condition is None:
+            pass
+        elif cur_reward_condition == "reward":
+            obs = np.concatenate([obs, [self._last_reward]], axis=0)
+        else:
+            raise NotImplementedError(f"Unidentified reward conditioning: {cur_reward_condition}")
+        
         return obs
     
     def _get_obs2(self, obs):
@@ -340,15 +358,15 @@ class PegInsertionEnv(gym.Env, Serializable):
     def render(self):
         try:
             frame = self.env.render()
-            frame = cv2.resize(frame, (120, 120))
+            frame = cv2.resize(frame, (400, 400, 3))
             return frame
         except (AttributeError, ImportError, RuntimeError) as e:
             # Fallback to a blank frame if rendering fails (common in headless environments)
             logger.log(f"Warning: Rendering failed with error: {e}. Returning blank frame.")
-            return np.zeros((120, 120, 3), dtype=np.uint8)
+            return np.zeros((400, 400, 3), dtype=np.uint8)
 
-    def render_pos(self) -> np.ndarray:
-        return self._last_obs[:3]
+    # def render_pos(self) -> np.ndarray:
+    #     return self._last_obs[:3] # TODO!!
 
     def annotation(self) -> str:
         info = {
@@ -372,7 +390,6 @@ class PegInsertionEnv(gym.Env, Serializable):
             'num_eval_tasks': self.num_eval_tasks,
             'max_episode_steps': self._max_episode_steps,
             'task_mode': self.task_mode,
-            'reward_conditioning': self.reward_conditioning,
             'goal_conditioning': self.goal_conditioning,
             'goal_noise_magnitude': self.goal_noise_magnitude,
             'goal_noise_type': self.goal_noise_type,

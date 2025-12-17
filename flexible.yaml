@@ -9,7 +9,6 @@ env:
   num_train_tasks: 16
   num_eval_tasks: 20
   task_mode: fixed
-  reward_conditioning: no
   goal_conditioning: yes_both
   normalize_kwarg: true
   num_parallel_workers: 20

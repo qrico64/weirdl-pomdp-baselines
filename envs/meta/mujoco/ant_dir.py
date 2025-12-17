@@ -20,9 +20,8 @@ class AntDirEnv(MultitaskAntEnv):
         num_eval_tasks:int=20,
         max_episode_steps=200,
         task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down", "circle_down_quarter"] = "circle",
-        reward_conditioning: Literal["no", "yes"] = "no",
-        goal_conditioning: Literal["no", "yes", "fixed_noise", "yes_relative", "yes_relative_noise"] = "no",
         goal_noise_magnitude: float = 0,
+        goal_conditioning: str = "no",
         goal_noise_type: Literal["normal", "uniform", "constrained_normal"] = "normal",
         infinite_tasks: Literal["no", "yes"] = "no",
         normalize_kwarg: bool = False,
@@ -35,9 +34,9 @@ class AntDirEnv(MultitaskAntEnv):
         self.task_mode = task_mode
         self.num_train_tasks = num_train_tasks
         self.num_eval_tasks = num_eval_tasks
-        self.reward_conditioning = reward_conditioning
         self.goal_conditioning = goal_conditioning
         self.goal_conditioning_view = ["no", "yes", "fixed_noise", "yes_relative", "yes_relative_noise"]
+        self.goal_conditioning_view += [cond + "/reward" for cond in self.goal_conditioning_view]
         self.goal_noise_magnitude = goal_noise_magnitude
         self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
@@ -45,12 +44,15 @@ class AntDirEnv(MultitaskAntEnv):
         self.normalize_kwarg = normalize_kwarg
         self.reward_scale = reward_scale
 
+        self._last_reward = 0.0
+
         logger.log()
         logger.log("****** Creating AntDir Environment ******")
         logger.log(f"num_train_tasks: {self.num_train_tasks}")
         logger.log(f"num_eval_tasks: {self.num_eval_tasks}")
         logger.log(f"task_mode: {self.task_mode}")
         logger.log(f"goal_conditioning: {self.goal_conditioning}")
+        logger.log(f"goal_conditioning_view: {self.goal_conditioning_view}")
         logger.log(f"goal_noise_magnitude: {self.goal_noise_magnitude}")
         logger.log(f"goal_noise_type: {self.goal_noise_type}")
         logger.log(f"infinite_tasks: {self.infinite_tasks}")
@@ -62,7 +64,7 @@ class AntDirEnv(MultitaskAntEnv):
         super(AntDirEnv, self).__init__(task, self.num_train_tasks + self.num_eval_tasks, **kwargs)
 
         # Update observation space: base (27) + goal (0 or 1) + reward (0 or 1)
-        obs_dim = 27 + (2 if self.goal_conditioning != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
+        obs_dim = self.obs_dim(self.goal_conditioning)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float64)
     
     def reset(self, **kwargs):
@@ -80,7 +82,7 @@ class AntDirEnv(MultitaskAntEnv):
         self.do_simulation(action, self.frame_skip)
         torso_xyz_after = np.array(self.get_body_com("torso"))
         torso_velocity = torso_xyz_after - torso_xyz_before
-        forward_reward = np.dot((torso_velocity[:2] / self.dt), direct)
+        forward_reward = np.dot((torso_velocity[:2] / self.dt), direct) * self.reward_scale
 
         ctrl_cost = 0.5 * np.square(action).sum()
         contact_cost = (
@@ -88,6 +90,7 @@ class AntDirEnv(MultitaskAntEnv):
         )
         survive_reward = 1.0
         reward = forward_reward - ctrl_cost - contact_cost + survive_reward
+        self._last_reward = reward
         state = self.state_vector()
         notdone = np.isfinite(state).all() and state[2] >= 0.2 and state[2] <= 1.0
         done = not notdone
@@ -100,7 +103,7 @@ class AntDirEnv(MultitaskAntEnv):
             torso_velocity=torso_velocity,
         )
         obs = super(AntDirEnv, self)._get_obs()
-        obs, info["obs"] = self._get_obs2(obs, reward=reward)
+        obs, info["obs"] = self._get_obs2(obs)
         return (
             obs,
             reward,
@@ -109,44 +112,48 @@ class AntDirEnv(MultitaskAntEnv):
             info,
         )
 
-    def _append_obs_raw(self, obs, reward=0.0, return_obs_type=None):
-        obs = np.copy(obs)
+    def _append_obs_raw(self, obs, return_obs_type=None):
+        if '/' in return_obs_type:
+            cur_goal_condition, cur_reward_condition = return_obs_type.split('/')
+        else:
+            cur_goal_condition, cur_reward_condition = return_obs_type, None
+
         goal: float
-        if return_obs_type == "yes":
+        if cur_goal_condition == "yes":
             goal = self._goal
             if self.normalize_kwarg:
                 goal = helpers.normalize_angle_to_pi_pi(goal)
-        elif return_obs_type == "no":
+        elif cur_goal_condition == "no":
             goal = None
-        elif return_obs_type == "fixed_noise":
+        elif cur_goal_condition == "fixed_noise":
             goal = self._goal + self._goal_noise
             if self.normalize_kwarg:
                 goal = helpers.normalize_angle_to_pi_pi(goal)
-        elif return_obs_type == "yes_relative":
+        elif cur_goal_condition == "yes_relative":
             self_orientation = self.get_torso_orientation()
             assert self.normalize_kwarg
             goal = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation)
-        elif return_obs_type == "yes_relative_noise":
+        elif cur_goal_condition == "yes_relative_noise":
             self_orientation = self.get_torso_orientation()
             assert self.normalize_kwarg
             goal = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation + self._goal_noise)
         else:
-            raise NotImplementedError(f"Unidentified goal conditioning: {return_obs_type}")
+            raise NotImplementedError(f"Unidentified goal conditioning: {cur_goal_condition}")
         if goal is not None:
             obs = np.concatenate([obs, [goal]], axis=0)
         else:
             obs = np.copy(obs)
 
-        if self.reward_conditioning == "yes":
-            obs = np.concatenate([obs, np.array([reward])], axis=0)
+        if cur_reward_condition == "yes":
+            obs = np.concatenate([obs, [self._last_reward]], axis=0)
         
         assert not np.any(np.isnan(obs))
         
         return obs
 
-    def _get_obs2(self, obs, reward=0.0):
-        info = {k: self._append_obs_raw(obs, reward=reward, return_obs_type=k) for k in self.goal_conditioning_view}
-        return self._append_obs_raw(obs, reward=reward, return_obs_type=self.goal_conditioning), info
+    def _get_obs2(self, obs):
+        info = {k: self._append_obs_raw(obs, return_obs_type=k) for k in self.goal_conditioning_view}
+        return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning), info
 
     def _get_obs(self):
         obs = super(AntDirEnv, self)._get_obs()
@@ -254,7 +261,12 @@ class AntDirEnv(MultitaskAntEnv):
         
     def obs_dim(self, return_obs_type=None):
         assert return_obs_type is not None
-        return 27 + (1 if return_obs_type != "no" else 0) + (1 if self.reward_conditioning == "yes" else 0)
+        if '/' in return_obs_type:
+            cur_goal_condition, cur_reward_condition = return_obs_type.split('/')
+        else:
+            cur_goal_condition, cur_reward_condition = return_obs_type, None
+        
+        return 27 + (1 if cur_goal_condition != "no" else 0) + (1 if cur_reward_condition == "yes" else 0)
 
     def annotation(self) -> str:
         info = {
