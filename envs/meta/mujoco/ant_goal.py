@@ -124,7 +124,6 @@ class AntGoalEnv(MultitaskAntEnv):
             goal = self._goal + self._goal_noise
             if self.normalize_kwarg:
                 goal = helpers.normalize_angle_to_pi_pi(goal)
-            obs = np.concatenate([obs, np.array([goal])], axis=0)
         elif return_obs_type == "yes_relative":
             self_orientation = self.get_torso_orientation()
             assert self.normalize_kwarg
@@ -138,6 +137,8 @@ class AntGoalEnv(MultitaskAntEnv):
         if goal is not None:
             goal_pos = np.array([np.cos(goal), np.sin(goal)])
             obs = np.concatenate([obs, goal_pos], axis=0)
+        else:
+            obs = np.copy(obs)
 
         if self.reward_conditioning == "yes":
             obs = np.concatenate([obs, np.array([reward])], axis=0)
