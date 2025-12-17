@@ -13,96 +13,6 @@ from .core.serializable import Serializable
 from metaworld.policies import SawyerPegInsertionSideV3Policy
 
 
-class MetaWorldExpertPolicy:
-    """
-    Wrapper around MetaWorld's deterministic expert policy to match the API
-    expected by learner.py for base models.
-    """
-    def __init__(self, obs_dim, action_dim):
-        self.obs_dim = obs_dim
-        assert self.obs_dim == 39
-        self.action_dim = action_dim
-        self._expert = SawyerPegInsertionSideV3Policy()
-        self._expert_env = None
-
-    def to(self, device):
-        """No-op for compatibility with PyTorch models."""
-        return self
-
-    def eval(self):
-        """No-op for compatibility with PyTorch models."""
-        return self
-
-    def parameters(self):
-        """Return empty list for compatibility with freezing logic."""
-        return []
-
-    def load_state_dict(self, state_dict):
-        """No-op for compatibility with model syncing."""
-        pass
-
-    def state_dict(self):
-        """Return empty dict for compatibility with model syncing."""
-        return {}
-
-    def get_initial_info(self):
-        """Return initial action and reward for Memory agents."""
-        import torch
-        from torchkit import pytorch_utils as ptu
-        action = ptu.zeros((1, self.action_dim))
-        reward = ptu.zeros((1, 1))
-        return action, reward
-
-    def act(self, prev_actions=None, obs=None, rewards=None, lengths=None,
-            deterministic=False, nominals=None, base_actions=None, **kwargs):
-        """
-        Produce actions using the MetaWorld expert policy.
-
-        For Transformer architecture:
-        - obs: (L, batch_size, obs_dim) - sequence of observations
-        - Returns: (batch_size, action_dim) - actions for the last timestep
-
-        For Memory/Markov architecture:
-        - obs: (batch_size, obs_dim) - current observation
-        - Returns: (batch_size, action_dim) - actions
-        """
-        import torch
-        from torchkit import pytorch_utils as ptu
-
-        # Handle both Transformer (sequence) and Markov (single obs) inputs
-        if obs.dim() == 3:  # Transformer: (L, batch_size, obs_dim)
-            # Get the last observation for each sequence in the batch
-            # lengths tells us the actual length of each sequence
-            obs = obs[:,:,:self.obs_dim]
-            batch_size = obs.shape[1]
-            actions = []
-            for i in range(batch_size):
-                if lengths is not None:
-                    # Get observation at position lengths[i]-1 (last valid timestep)
-                    last_obs = obs[lengths[i]-1, i, :].cpu().numpy()
-                else:
-                    # Get last observation
-                    last_obs = obs[-1, i, :].cpu().numpy()
-                action = self._expert.get_action(last_obs)
-                actions.append(action)
-            actions = ptu.from_numpy(np.array(actions, dtype=np.float32))
-        elif obs.dim() == 2:  # Markov/Memory: (batch_size, obs_dim)
-            obs = obs[:,:self.obs_dim]
-            batch_size = obs.shape[0]
-            actions = []
-            for i in range(batch_size):
-                obs_np = obs[i, :].cpu().numpy()
-                action = self._expert.get_action(obs_np)
-                actions.append(action)
-            actions = ptu.from_numpy(np.array(actions, dtype=np.float32))
-        else:
-            raise ValueError(f"Unexpected obs shape: {obs.shape}")
-
-        # Return format matches policy models: (actions, values, action_log_probs, dist_entropy)
-        # We only need actions for the base model, so return None for the rest
-        return actions, None, None, None
-
-
 def init_tasks_deterministic_random(n_tasks, low, high):
     xl = int(np.ceil(np.sqrt(n_tasks)))
     yl = int(np.ceil(n_tasks / xl))
@@ -403,4 +313,93 @@ class PegInsertionEnv(gym.Env, Serializable):
         # Reinitialize the environment with saved parameters
         self.__init__(**state)
 
+
+class MetaWorldExpertPolicy:
+    """
+    Wrapper around MetaWorld's deterministic expert policy to match the API
+    expected by learner.py for base models.
+    """
+    def __init__(self, obs_dim, action_dim):
+        self.obs_dim = obs_dim
+        assert self.obs_dim == 39
+        self.action_dim = action_dim
+        self._expert = SawyerPegInsertionSideV3Policy()
+        self._expert_env = None
+
+    def to(self, device):
+        """No-op for compatibility with PyTorch models."""
+        return self
+
+    def eval(self):
+        """No-op for compatibility with PyTorch models."""
+        return self
+
+    def parameters(self):
+        """Return empty list for compatibility with freezing logic."""
+        return []
+
+    def load_state_dict(self, state_dict):
+        """No-op for compatibility with model syncing."""
+        pass
+
+    def state_dict(self):
+        """Return empty dict for compatibility with model syncing."""
+        return {}
+
+    def get_initial_info(self):
+        """Return initial action and reward for Memory agents."""
+        import torch
+        from torchkit import pytorch_utils as ptu
+        action = ptu.zeros((1, self.action_dim))
+        reward = ptu.zeros((1, 1))
+        return action, reward
+
+    def act(self, prev_actions=None, obs=None, rewards=None, lengths=None,
+            deterministic=False, nominals=None, base_actions=None, **kwargs):
+        """
+        Produce actions using the MetaWorld expert policy.
+
+        For Transformer architecture:
+        - obs: (L, batch_size, obs_dim) - sequence of observations
+        - Returns: (batch_size, action_dim) - actions for the last timestep
+
+        For Memory/Markov architecture:
+        - obs: (batch_size, obs_dim) - current observation
+        - Returns: (batch_size, action_dim) - actions
+        """
+        import torch
+        from torchkit import pytorch_utils as ptu
+
+        # Handle both Transformer (sequence) and Markov (single obs) inputs
+        if obs.dim() == 3:  # Transformer: (L, batch_size, obs_dim)
+            # Get the last observation for each sequence in the batch
+            # lengths tells us the actual length of each sequence
+            obs = obs[:,:,:self.obs_dim]
+            batch_size = obs.shape[1]
+            actions = []
+            for i in range(batch_size):
+                if lengths is not None:
+                    # Get observation at position lengths[i]-1 (last valid timestep)
+                    last_obs = obs[lengths[i]-1, i, :].cpu().numpy()
+                else:
+                    # Get last observation
+                    last_obs = obs[-1, i, :].cpu().numpy()
+                action = self._expert.get_action(last_obs)
+                actions.append(action)
+            actions = ptu.from_numpy(np.array(actions, dtype=np.float32))
+        elif obs.dim() == 2:  # Markov/Memory: (batch_size, obs_dim)
+            obs = obs[:,:self.obs_dim]
+            batch_size = obs.shape[0]
+            actions = []
+            for i in range(batch_size):
+                obs_np = obs[i, :].cpu().numpy()
+                action = self._expert.get_action(obs_np)
+                actions.append(action)
+            actions = ptu.from_numpy(np.array(actions, dtype=np.float32))
+        else:
+            raise ValueError(f"Unexpected obs shape: {obs.shape}")
+
+        # Return format matches policy models: (actions, values, action_log_probs, dist_entropy)
+        # We only need actions for the base model, so return None for the rest
+        return actions, None, None, None
 
