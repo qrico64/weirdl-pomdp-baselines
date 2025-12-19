@@ -105,18 +105,15 @@ class VariBadWrapper(gym.Wrapper):
         self.step_count_bamdp = 0
 
         # normal reset
-        return_obs_type = kwargs.get('return_obs_type', None)
-        self.env.unwrapped.set_return_obs_type(return_obs_type)
-        state = self.env.reset()
-        if isinstance(state, tuple) and len(state) == 2 and isinstance(state[1], dict):
-            state = state[0]
+        state, info = self.env.reset()
+        state = self._get_obs(state)
+        if 'obs' in info:
+            for k in info['obs'].keys():
+                info['obs'][k] = self._get_obs(info['obs'][k])
 
         self.done_mdp = False
 
-        if return_obs_type is not None:
-            return self._get_obs(state), self._get_obs(np.copy(self.env.unwrapped.obs_return))
-
-        return self._get_obs(state)
+        return state, info
 
     def wrap_state_with_done(self, state):
         # for some custom evaluation like semicircle
@@ -141,18 +138,15 @@ class VariBadWrapper(gym.Wrapper):
             action = lb + (action + 1.0) * 0.5 * (ub - lb)
             action = np.clip(action, lb, ub)
 
-        return_obs_type = kwargs.get('return_obs_type', None)
-        self.env.unwrapped.set_return_obs_type(return_obs_type)
-
         # do normal environment step in MDP
         state, reward, terminated, truncated, info = self.env.step(action)
         self.done_mdp = terminated or truncated
 
         info["done_mdp"] = self.done_mdp
-        info["obs_return"] = self._get_obs(self.env.unwrapped.obs_return) if return_obs_type is not None else None
-        if return_obs_type is not None:
-            assert self.env.unwrapped.obs_return is not None
         state = self._get_obs(state)
+        if 'obs' in info:
+            for k in info['obs'].keys():
+                info['obs'][k] = self._get_obs(info['obs'][k])
 
         self.step_count_bamdp += 1
         # if we want to maximise performance over multiple episodes,
@@ -167,6 +161,9 @@ class VariBadWrapper(gym.Wrapper):
             info["start_state"] = self.reset_mdp()
 
         return state, reward, done_bamdp, info
+    
+    def obs_dim(self, **kwargs):
+        return self.env.unwrapped.obs_dim(**kwargs) + (1 if self.add_done_info else 0)
 
 
 class TimeLimitMask(gym.Wrapper):
