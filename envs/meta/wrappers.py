@@ -106,10 +106,14 @@ class VariBadWrapper(gym.Wrapper):
 
         # normal reset
         state, info = self.env.reset()
+        state = self._get_obs(state)
+        if 'obs' in info:
+            for k in info['obs'].keys():
+                info['obs'][k] = self._get_obs(info['obs'][k])
 
         self.done_mdp = False
 
-        return self._get_obs(state), info
+        return state, info
 
     def wrap_state_with_done(self, state):
         # for some custom evaluation like semicircle
@@ -140,6 +144,9 @@ class VariBadWrapper(gym.Wrapper):
 
         info["done_mdp"] = self.done_mdp
         state = self._get_obs(state)
+        if 'obs' in info:
+            for k in info['obs'].keys():
+                info['obs'][k] = self._get_obs(info['obs'][k])
 
         self.step_count_bamdp += 1
         # if we want to maximise performance over multiple episodes,

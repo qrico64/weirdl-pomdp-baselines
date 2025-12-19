@@ -71,8 +71,7 @@ class AntGoalEnv(MultitaskAntEnv):
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float64)
     
     def reset(self, **kwargs):
-        obs = super(AntGoalEnv, self).reset(**kwargs)
-        info = {}
+        obs, info = super(AntGoalEnv, self).reset(**kwargs)
         obs, info["obs"] = self._get_obs2(obs)
         return obs, info
 
@@ -159,9 +158,9 @@ class AntGoalEnv(MultitaskAntEnv):
         info = {k: self._append_obs_raw(obs, return_obs_type=k) for k in self.goal_conditioning_view}
         return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning), info
 
-    def _get_obs(self):
-        obs = super(AntGoalEnv, self)._get_obs()
-        return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning)
+    # def _get_obs(self):
+    #     obs = super(AntGoalEnv, self)._get_obs()
+    #     return self._append_obs_raw(obs, return_obs_type=self.goal_conditioning)
 
     def sample_tasks(self, num_tasks):
         assert self.task_mode is not None, f"{self.task_mode}"

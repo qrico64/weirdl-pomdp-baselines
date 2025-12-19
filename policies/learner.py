@@ -800,12 +800,13 @@ class Learner:
                         nominal_lengths = np.argmax(worker_buffers['is_nominals'][active_workers, :, 0] != 0, axis=1)
                         nominal_batch_lengths = worker_buffers['list_len'][active_workers] - nominal_lengths
                         L = nominal_batch_lengths.max()
-                        nominal_batch_obs = np.zeros((len(active_workers), L, self.obs_dim), dtype=np.float32)
+                        nominal_batch_obs = np.zeros((len(active_workers), L, self.base_model.obs_dim), dtype=np.float32)
                         nominal_batch_prev_actions = np.zeros((len(active_workers), L, self.act_dim), dtype=np.float32)
                         nominal_batch_rewards = np.zeros((len(active_workers), L, 1), dtype=np.float32)
                         nominal_batch_nominals = np.zeros((len(active_workers), L, 1), dtype=np.int64)
+                        assert self.obs_dim >= self.base_model.obs_dim
                         for i in range(len(active_workers)):
-                            nominal_batch_obs[i, : nominal_batch_lengths[i], :] = worker_buffers['obs_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
+                            nominal_batch_obs[i, : nominal_batch_lengths[i], :] = worker_buffers['obs_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], : self.base_model.obs_dim]
                             nominal_batch_prev_actions[i, : nominal_batch_lengths[i], :] = worker_buffers['act_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
                             nominal_batch_rewards[i, : nominal_batch_lengths[i], :] = worker_buffers['rew_list'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
                             nominal_batch_nominals[i, : nominal_batch_lengths[i], :] = worker_buffers['is_nominals'][active_workers[i], nominal_lengths[i] : worker_buffers['list_len'][active_workers[i]], :]
@@ -1041,7 +1042,7 @@ class Learner:
 
                 # Collect reset responses (workers reset in parallel)
                 for worker_id in workers_to_reset:
-                    msg_type, obs_np = parallel_env.remotes[worker_id].recv()
+                    msg_type, (obs_np, info) = parallel_env.remotes[worker_id].recv()
                     assert msg_type == 'obs'
 
                     state = worker_states[worker_id]
@@ -1193,7 +1194,8 @@ class Learner:
                 nominals += [0 for _ in range(len(nominal_trajectory['rewards']))]
 
             if self.env_type == "meta" and self.n_tasks is not None:
-                obs = ptu.from_numpy(self.eval_env.reset(task=task))  # reset task
+                obs_np, info = self.eval_env.reset(task=task)
+                obs = ptu.from_numpy(obs_np)  # reset task
                 observations[task_idx, step, :] = ptu.get_numpy(obs[:obs_size])
                 # frame = self.eval_env.render()
                 # assert frame.ndim == 3 and frame.shape[-1] == 3 and frame.shape[0] <= 128 and frame.shape[1] <= 128
@@ -1239,7 +1241,8 @@ class Learner:
                         base_actions = None
                         if self.use_residuals:
                             assert not self.base_model.use_nominals, f"{self.base_model.use_nominals}"
-                            nominal_batch_obs = batch_obs[cur_nominal_length:, :, :].clone().detach()
+                            assert self.obs_dim >= self.base_model.obs_dim
+                            nominal_batch_obs = batch_obs[cur_nominal_length:, :, : self.base_model.obs_dim].clone().detach()
                             nominal_batch_prev_actions = batch_prev_actions[cur_nominal_length:, :, :].clone().detach()
                             nominal_batch_rewards = batch_rewards[cur_nominal_length:, :, :].clone().detach()
                             nominal_batch_nominals = batch_nominals[cur_nominal_length:, :].clone().detach()
