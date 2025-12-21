@@ -20,7 +20,7 @@ third_party/
 
 
 slurm
-configs
+configs/*/
 .bash_history
 .python_history
 experiments

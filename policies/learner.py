@@ -668,10 +668,8 @@ class Learner:
             worker_states[worker_id]['obs'] = obs
             worker_states[worker_id]['active'] = True
             worker_states[worker_id]['steps'] = 0
-
-            if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                worker_buffers['list_len'][worker_id] = 0
-                worker_buffers['cur_nominal_index'][worker_id] = 1
+            worker_buffers['list_len'][worker_id] = 0
+            worker_buffers['cur_nominal_index'][worker_id] = 1
 
             if self.use_nominals:
                 assert return_obs_type is None, f"{return_obs_type}"
@@ -925,30 +923,19 @@ class Learner:
                         terminal=np.array([term], dtype=float),
                         next_observation=ptu.get_numpy(next_obs.squeeze(dim=0)),
                     )
-                elif self.agent_arch == AGENT_ARCHS.Transformer:
-                    worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
-                    worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
-                    worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
-                    worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
-                    worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
-                    if return_obs_type is not None:
-                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
-                        assert not ptu.isnan(info['obs'][return_obs_type])
-                    if self.use_residuals:
-                        worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
-                    worker_buffers['list_len'][worker_id] += 1
-                else:  # Memory-based agent
-                    worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
-                    worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
-                    worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
-                    worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
-                    worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
-                    if return_obs_type is not None:
-                        worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
-                        assert not ptu.isnan(info['obs'][return_obs_type])
-                    if self.use_residuals:
-                        worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
-                    worker_buffers['list_len'][worker_id] += 1
+                
+                # Add transition to current trajectory buffer
+                worker_buffers['obs_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(next_obs[0])
+                worker_buffers['act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(action[0])
+                worker_buffers['rew_list'][worker_id, worker_buffers['list_len'][worker_id], :] = ptu.get_numpy(reward[0])
+                worker_buffers['term_list'][worker_id, worker_buffers['list_len'][worker_id], :] = term
+                worker_buffers['is_nominals'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_nominal_index'][worker_id]
+                if return_obs_type is not None:
+                    worker_buffers['obs_return_list'][worker_id, worker_buffers['list_len'][worker_id], :] = info['obs'][return_obs_type]
+                    assert not ptu.isnan(info['obs'][return_obs_type])
+                if self.use_residuals:
+                    worker_buffers['base_act_list'][worker_id, worker_buffers['list_len'][worker_id], :] = worker_buffers['cur_base_action'][worker_id]
+                worker_buffers['list_len'][worker_id] += 1
 
                 if (not is_artificial_rollout) and info['done_mdp'] == True:
                     worker_buffers['cur_nominal_index'][worker_id] += 1
@@ -962,7 +949,27 @@ class Learner:
                 # Handle episode completion
                 if done_rollout:
                     # For memory-based agents, add complete episode to buffer
-                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
+                    cur_fix_goals_i = None
+                    if is_artificial_rollout:
+                        assert not self.use_residuals
+                        assert self.act_continuous # for sake of rigor
+                        assert not ptu.isnan(worker_buffers['obs_list'])
+                        if return_obs_type is not None:
+                            assert not ptu.isnan(worker_buffers['obs_return_list'])
+                        rollout_dict = dict(
+                            observations = worker_buffers['obs_list' if return_obs_type is None else 'obs_return_list'][worker_id, : worker_buffers['list_len'][worker_id]],
+                            actions = worker_buffers['act_list'][worker_id, : worker_buffers['list_len'][worker_id]],
+                            rewards = worker_buffers['rew_list'][worker_id, : worker_buffers['list_len'][worker_id]],
+                            terminals = worker_buffers['term_list'][worker_id, : worker_buffers['list_len'][worker_id]],
+                            is_nominals = worker_buffers['is_nominals'][worker_id, : worker_buffers['list_len'][worker_id]],
+                            success = worker_states[worker_id]['success'],
+                        )
+                        for k in rollout_dict:
+                            rollout_dict[k] = np.copy(rollout_dict[k])
+                        # rollout_dict['observations'][worker_buffers['list_len'][worker_id] - 1] = 0 # remove next_obs from obs array
+                        rollout_dict['goal'] = state['task']
+                        collected_rollouts[cur_fix_goals_i] = rollout_dict
+                    elif self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
                         act_buffer = worker_buffers['act_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]]
                         if not self.act_continuous:
                             act_buffer = np.argmax(act_buffer, axis=-1, keepdims=True)
@@ -980,32 +987,14 @@ class Learner:
                             if self.use_residuals:
                                 episode_info['base_actions'] = worker_buffers['base_act_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]]
                             self.policy_storage.add_episode(**episode_info)
-                        else:
-                            assert not self.use_residuals
-                            assert self.act_continuous # for sake of rigor
-                            assert not ptu.isnan(worker_buffers['obs_list'])
-                            if return_obs_type is not None:
-                                assert not ptu.isnan(worker_buffers['obs_return_list'])
-                            rollout_dict = dict(
-                                observations = worker_buffers['obs_list' if return_obs_type is None else 'obs_return_list'][worker_id, : worker_buffers['list_len'][worker_id]],
-                                actions = worker_buffers['act_list'][worker_id, : worker_buffers['list_len'][worker_id]],
-                                rewards = worker_buffers['rew_list'][worker_id, : worker_buffers['list_len'][worker_id]],
-                                terminals = worker_buffers['term_list'][worker_id, : worker_buffers['list_len'][worker_id]],
-                                is_nominals = worker_buffers['is_nominals'][worker_id, : worker_buffers['list_len'][worker_id]],
-                                success = worker_states[worker_id]['success'],
-                            )
-                            for k in rollout_dict:
-                                rollout_dict[k] = np.copy(rollout_dict[k])
-                            # rollout_dict['observations'][worker_buffers['list_len'][worker_id] - 1] = 0 # remove next_obs from obs array
-                            rollout_dict['goal'] = state['task']
-                            collected_rollouts[cur_fix_goals_i] = rollout_dict
 
-                        (logger.log if not is_artificial_rollout else logger.log_orange)(
-                            f"goal_{cur_fix_goals_i} worker_{worker_id} steps: {state['steps']} term: {term} "
-                            f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
-                            f" step: {worker_buffers['list_len'][worker_id]}"
-                            + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
-                        )
+                    (logger.log if not is_artificial_rollout else logger.log_orange)(
+                        (f"goal_{cur_fix_goals_i} " if cur_fix_goals_i is not None else "") +
+                        f"worker_{worker_id} steps: {state['steps']} term: {term} "
+                        f"ret: {worker_buffers['rew_list'][worker_id, 1 : worker_buffers['list_len'][worker_id]].sum()}"
+                        f" step: {worker_buffers['list_len'][worker_id]}"
+                        + (f" nominal: {state['nominal_length']}" if state['nominal_length'] is not None else "")
+                    )
                     
                     if 'rollout_success' not in self.env_stats:
                         self.env_stats['rollout_success'] = 0
@@ -1053,9 +1042,8 @@ class Learner:
                     state['success'] = None
 
                     # Reset storage for memory-based agents
-                    if self.agent_arch in [AGENT_ARCHS.Memory, AGENT_ARCHS.Memory_Markov, AGENT_ARCHS.Transformer]:
-                        worker_buffers['list_len'][worker_id] = 0
-                        worker_buffers['cur_nominal_index'][worker_id] = 1
+                    worker_buffers['list_len'][worker_id] = 0
+                    worker_buffers['cur_nominal_index'][worker_id] = 1
 
                     if self.use_nominals:
                         cur_fix_goals_i = worker_states[worker_id]['fix_goals_i']

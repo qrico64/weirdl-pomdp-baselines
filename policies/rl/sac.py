@@ -97,7 +97,6 @@ class SAC(RLAlgorithmBase):
         masks=None,
         value_fn=None,
     ):
-        T1, B, _ = rewards.shape
         # Q^tar(h(t+1), pi(h(t+1))) + H[pi(h(t+1))]
         with torch.no_grad():
             # first next_actions from current policy,
@@ -111,6 +110,7 @@ class SAC(RLAlgorithmBase):
                 )
                 assert new_actions.shape == actions.shape
             elif markov_actor:
+                assert markov_critic
                 new_actions, new_log_probs = self.forward_actor(
                     actor, next_observs if markov_critic else observs
                 )
@@ -199,8 +199,8 @@ class SAC(RLAlgorithmBase):
                 prev_actions=actions, rewards=rewards, observs=observs, nominals=nominals,
                 base_actions=base_actions,
             )  # (T+1, B, A)
-            if base_actions is not None:
-                new_actions += base_actions
+        if base_actions is not None:
+            new_actions += base_actions
 
         if markov_critic:
             q1 = critic[0](observs, new_actions)
