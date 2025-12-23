@@ -19,7 +19,7 @@ class AntGoalEnv(MultitaskAntEnv):
         num_train_tasks:int=3,
         num_eval_tasks:int=20,
         max_episode_steps=200,
-        task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down", "circle_down_quarter"] = "circle",
+        task_mode: Literal["circle", "circle_down_up", "circle_left_right_up_down", "circle_down_quarter", "circle_1_2"] = "circle",
         goal_conditioning: str = "no",
         goal_noise_magnitude: float = 0,
         goal_noise_type: Literal["normal", "uniform", "constrained_normal"] = "normal",
@@ -36,12 +36,12 @@ class AntGoalEnv(MultitaskAntEnv):
         self.num_train_tasks = num_train_tasks
         self.num_eval_tasks = num_eval_tasks
         self.goal_conditioning = goal_conditioning
-        self.goal_conditioning_view = ["no", "yes", "fixed_noise", "yes_relative", "yes_relative_noise"]
+        self.goal_conditioning_view = ["no", "yes", "fixed_noise"]
         self.goal_conditioning_view += [cond + "/reward" for cond in self.goal_conditioning_view]
         self.goal_noise_magnitude = goal_noise_magnitude
         self.goal_noise_type = goal_noise_type
         self.infinite_tasks = infinite_tasks
-        self._goal_noise = 0.0
+        self._goal_noise = np.zeros((2,))
         self.normalize_kwarg = normalize_kwarg
         self.reward_scale = reward_scale
         self.goal_radius = goal_radius
@@ -78,7 +78,7 @@ class AntGoalEnv(MultitaskAntEnv):
     def step(self, action):
         torso_xyz_before = np.array(self.get_body_com("torso"))
 
-        direct = np.array([np.cos(self._goal), np.sin(self._goal)])
+        direct = self._goal
 
         assert not np.any(np.isnan(action)), f"{action}"
         self.do_simulation(action, self.frame_skip)
@@ -120,20 +120,16 @@ class AntGoalEnv(MultitaskAntEnv):
         else:
             cur_goal_condition, cur_reward_condition = return_obs_type, None
 
-        goal: float
+        goal: np.ndarray
         if cur_goal_condition == "yes":
             goal = self._goal
-            if self.normalize_kwarg:
-                goal = helpers.normalize_angle_to_pi_pi(goal)
         elif cur_goal_condition == "no":
             goal = None
         elif cur_goal_condition == "fixed_noise":
             goal = self._goal + self._goal_noise
-            if self.normalize_kwarg:
-                goal = helpers.normalize_angle_to_pi_pi(goal)
         elif cur_goal_condition == "yes_relative":
             self_orientation = self.get_torso_orientation()
-            assert self.normalize_kwarg
+            assert self.normalize_kwarg, f"{return_obs_type}"
             goal = helpers.normalize_angle_to_pi_pi(self._goal - self_orientation)
         elif cur_goal_condition == "yes_relative_noise":
             self_orientation = self.get_torso_orientation()
@@ -142,8 +138,7 @@ class AntGoalEnv(MultitaskAntEnv):
         else:
             raise NotImplementedError(f"Unidentified goal conditioning: {cur_goal_condition}")
         if goal is not None:
-            goal_pos = np.array([np.cos(goal), np.sin(goal)])
-            obs = np.concatenate([obs, goal_pos], axis=0)
+            obs = np.concatenate([obs, goal], axis=0)
         else:
             obs = np.copy(obs)
 
@@ -172,9 +167,13 @@ class AntGoalEnv(MultitaskAntEnv):
             assignment[np.round(np.linspace(0, n_tasks, self.num_train_tasks, endpoint=False)).astype(int)] = True
             self.train_goals = angles[assignment]
             self.eval_goals = angles[np.logical_not(assignment)]
+            self.train_goals = np.stack([np.cos(self.train_goals), np.sin(self.train_goals)], axis=1)
+            self.eval_goals = np.stack([np.cos(self.eval_goals), np.sin(self.eval_goals)], axis=1)
         elif self.task_mode == "circle_down_up":
             self.train_goals = np.linspace(np.pi, np.pi * 2, num=self.num_train_tasks, endpoint=False)
             self.eval_goals = np.linspace(0, np.pi, num=self.num_eval_tasks, endpoint=False)
+            self.train_goals = np.stack([np.cos(self.train_goals), np.sin(self.train_goals)], axis=1)
+            self.eval_goals = np.stack([np.cos(self.eval_goals), np.sin(self.eval_goals)], axis=1)
         elif self.task_mode == "circle_left_right_up_down":
             train_goals_right = np.linspace(-np.pi / 4, np.pi / 4, num = self.num_train_tasks // 2, endpoint=False)
             train_goals_left = np.linspace(np.pi * 3 / 4, np.pi * 5 / 4, num = self.num_train_tasks - self.num_train_tasks // 2, endpoint=False)
@@ -182,9 +181,18 @@ class AntGoalEnv(MultitaskAntEnv):
             eval_goals_top = np.linspace(np.pi / 4, np.pi * 3 / 4, num = self.num_eval_tasks // 2, endpoint=False)
             eval_goals_down = np.linspace(np.pi * 5 / 4, np.pi * 7 / 4, num = self.num_eval_tasks - self.num_eval_tasks // 2, endpoint=False)
             self.eval_goals = np.concatenate([eval_goals_top, eval_goals_down], axis=0)
+            self.train_goals = np.stack([np.cos(self.train_goals), np.sin(self.train_goals)], axis=1)
+            self.eval_goals = np.stack([np.cos(self.eval_goals), np.sin(self.eval_goals)], axis=1)
         elif self.task_mode == "circle_down_quarter":
             self.train_goals = np.linspace(np.pi * 5 / 4, np.pi * 7 / 4, num = self.num_train_tasks, endpoint=False)
             self.eval_goals = np.linspace(-np.pi / 4, np.pi * 5 / 4, num = self.num_eval_tasks, endpoint=False)
+            self.train_goals = np.stack([np.cos(self.train_goals), np.sin(self.train_goals)], axis=1)
+            self.eval_goals = np.stack([np.cos(self.eval_goals), np.sin(self.eval_goals)], axis=1)
+        elif self.task_mode == "circle_1_2":
+            self.train_goals = np.linspace(0, np.pi * 2, num=self.num_train_tasks, endpoint=False)
+            self.eval_goals = np.linspace(0, np.pi * 2, num=self.num_eval_tasks, endpoint=False)
+            self.train_goals = np.stack([np.cos(self.train_goals), np.sin(self.train_goals)], axis=1)
+            self.eval_goals = 2 * np.stack([np.cos(self.eval_goals), np.sin(self.eval_goals)], axis=1)
         else:
             raise NotImplementedError(f"{self.task_mode} not allowed.")
         
@@ -194,18 +202,25 @@ class AntGoalEnv(MultitaskAntEnv):
 
     def train_task_distribution(self):
         if self.infinite_tasks != "yes":
-            return self.goals[np.random.randint(len(self.goals))]
+            angle = self.goals[np.random.randint(len(self.goals))]
+            return np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
         elif self.task_mode == "circle":
-            return np.random.uniform(0, 2 * np.pi)
+            angle = np.random.uniform(0, 2 * np.pi)
+            return np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
         elif self.task_mode == "circle_down_up":
-            return np.random.uniform(np.pi, 2 * np.pi)
+            angle = np.random.uniform(np.pi, 2 * np.pi)
+            return np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
         elif self.task_mode == "circle_left_right_up_down":
             angle = np.random.uniform(-np.pi / 4, 3 * np.pi / 4)
             if angle > np.pi / 4:
                 angle += np.pi / 2
-            return angle
+            return np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
         elif self.task_mode == "circle_down_quarter":
-            return np.random.uniform(np.pi * 5 / 4, np.pi * 7 / 4)
+            angle = np.random.uniform(np.pi * 5 / 4, np.pi * 7 / 4)
+            return np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+        elif self.task_mode == "circle_1_2":
+            angle = np.random.uniform(0, 2 * np.pi)
+            return 2 * np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
         else:
             raise NotImplementedError(f"{self.task_mode} not allowed.")
 
@@ -217,7 +232,6 @@ class AntGoalEnv(MultitaskAntEnv):
     
     def reset_task(self, goal, override_task=None):
         if goal is not None:
-            assert isinstance(goal, float)
             if self.infinite_tasks != "yes":
                 assert goal in self.goals
             self._goal = goal
@@ -227,14 +241,14 @@ class AntGoalEnv(MultitaskAntEnv):
             self._task = {"goal": self._goal}
 
         if self.goal_noise_type == "normal":
-            self._goal_noise = np.random.randn() * self.goal_noise_magnitude
+            self._goal_noise = np.random.randn(2) * self.goal_noise_magnitude
         elif self.goal_noise_type == "uniform":
-            self._goal_noise = np.random.uniform(-1, 1) * self.goal_noise_magnitude
+            self._goal_noise = np.random.uniform(-1, 1, (2,)) * self.goal_noise_magnitude
         elif self.goal_noise_type == "constrained_normal":
-            self._goal_noise = np.random.randn() * self.goal_noise_magnitude
+            self._goal_noise = np.random.randn(2) * self.goal_noise_magnitude
             self._goal_noise = np.clip(self._goal_noise, -self.goal_noise_magnitude, self.goal_noise_magnitude)
         else:
-            self._goal_noise = 0.0
+            self._goal_noise = np.zeros((2,))
         
         if override_task is not None:
             self._task = override_task
@@ -264,8 +278,7 @@ class AntGoalEnv(MultitaskAntEnv):
     
     def is_goal_state(self):
         torso_xyz_after = np.array(self.get_body_com("torso"))
-        direct = np.array([np.cos(self._goal), np.sin(self._goal)])
-        if np.linalg.norm(torso_xyz_after[:2] - direct) <= self.goal_radius:
+        if np.linalg.norm(torso_xyz_after[:2] - self._goal) <= self.goal_radius:
             return True
         else:
             return False

@@ -1,4 +1,4 @@
-seed: 42
+seed: 44
 cuda: 0 # use_gpu
 env:
   env_type: meta
@@ -8,7 +8,7 @@ env:
   num_tasks: 36
   num_train_tasks: 16
   num_eval_tasks: 20
-  task_mode: circle_down_up
+  task_mode: circle_1_2
   goal_conditioning: yes
   normalize_kwarg: true
   num_parallel_workers: 30
@@ -38,7 +38,7 @@ train:
 
 eval:
   eval_stochastic: false # also eval stochastic policy
-  log_interval: 8 # num of iters
+  log_interval: 16 # num of iters
   save_interval: 512
   log_tensorboard: true
 
@@ -46,8 +46,8 @@ policy:
   seq_model: mlp # [lstm, gru]
   algo_name: sac # [td3, sac]
 
-  dqn_layers: [512, 512, 512]
-  policy_layers: [512, 512, 512]
+  dqn_layers: [512, 512, 512, 512, 512]
+  policy_layers: [512, 512, 512, 512, 512]
   lr: 0.0003
   gamma: 0.99
   tau: 0.005
