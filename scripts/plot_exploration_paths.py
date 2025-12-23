@@ -54,6 +54,8 @@ def plot_trajectories_pointenv(dir: str):
     idx_from = 0
     idx_env_step = 0
     for idx, line in enumerate(lines):
+        if len(line) >= 29 and line[0] == '[' and line[27:29] == '] ':
+            line = line[29:]
         if line.startswith("env steps "):
             idx_env_step = idx
         if line.startswith("Task "):
@@ -61,44 +63,39 @@ def plot_trajectories_pointenv(dir: str):
     print(f"  - starting from {idx_from}")
     
     lines_truncated = lines[idx_from:]
+    task_idx = 0
     for idx, line in enumerate(lines_truncated):
+        if len(line) >= 29 and line[0] == '[' and line[27:29] == '] ':
+            line = line[29:]
         if line.startswith("env steps "):
             assert line.replace('env steps ', '').isnumeric()
             env_step = int(line.replace('env steps ', ''))
+            task_idx = 0
         elif line.startswith("Task "):
-            task_idx = int(line.split(' ')[1])
+            goal = np.array(eval('[' + ', '.join(line.split(' (')[0][5:].strip(' []').split()) + ']'), dtype=np.float32)
             assert line.strip().endswith('):')
-            annotation = line.strip()[line.strip().find(') (') + 3 : -2]
-            if config['env']['env_name'] == "AntDir-v0":
-                if isinstance(eval(annotation), dict):
-                    task_pos = eval(annotation)['_goal']
-                assert isinstance(task_pos, float)
-            else:
-                if 'Goal ' in line:
-                    task_pos = eval(line.split('Goal ')[1].split(' Wind')[0])
-                else:
-                    task_pos = env.goals[task_idx]
             trajectories = backwards_compatible_trajectory_generation(lines_truncated[idx + 1])
             assert all(trajectory.ndim == 2 and trajectory.shape[1] == 3 for trajectory in trajectories), f"{[trajectory.shape for trajectory in trajectories]}"
             if env_step not in movement:
                 movement[env_step] = {}
             if task_idx not in movement:
                 movement[env_step][task_idx] = {}
-            movement[env_step][task_idx]['is_train'] = task_idx < config['env']['num_train_tasks']
-            movement[env_step][task_idx]['task_pos'] = task_pos
+            movement[env_step][task_idx]['is_train'] = np.linalg.norm(goal) > 1.5
+            movement[env_step][task_idx]['task_pos'] = goal
             movement[env_step][task_idx]['trajectories'] = trajectories
 
-            if config['env']['env_name'] == "AntDir-v0":
-                mins = np.array([trajectory.min(axis=0) for trajectory in trajectories]).min(axis=0)[:2]
-                maxs = np.array([trajectory.max(axis=0) for trajectory in trajectories]).max(axis=0)[:2]
-            else:
-                mins = env.goals.min(axis=0) - 0.5
-                maxs = env.goals.max(axis=0) + 0.5
+            mins = np.array([trajectory.min(axis=0) for trajectory in trajectories]).min(axis=0)[:2]
+            maxs = np.array([trajectory.max(axis=0) for trajectory in trajectories]).max(axis=0)[:2]
+            mins = np.minimum(mins, goal - env.goal_radius)
+            maxs = np.maximum(maxs, goal + env.goal_radius)
+            mins = np.full((2,), -3)
+            maxs = np.full((2,), 3)
             mids = (mins + maxs) / 2
             lens = maxs - mins
-            mins, maxs = mids - lens.max(), mids + lens.max()
+            mins, maxs = mids - lens.max() / 2, mids + lens.max() / 2
             movement[env_step][task_idx]['mins'] = mins
             movement[env_step][task_idx]['maxs'] = maxs
+            task_idx += 1
 
     last_ep = max(list(movement.keys()))
 
@@ -207,7 +204,6 @@ def main():
         try:
             plot_trajectories_pointenv(candidate)
         except Exception as e:
-            raise
             continue
 
 
