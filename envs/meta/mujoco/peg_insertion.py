@@ -5,8 +5,9 @@ import metaworld
 import gymnasium as gym
 import imageio
 import os
-import cv2
+from PIL import Image
 from torchkit import pytorch_utils as ptu
+from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
 
 from .core.serializable import Serializable
 
@@ -39,6 +40,8 @@ class PegInsertionEnv(gym.Env, Serializable):
         infinite_tasks: Literal["no", "yes"] = "no",
         normalize_kwarg: bool = False,
         seed: int = None,
+        render_width: int = 480,
+        render_height: int = 480,
         **kwargs
     ):
         # Initialize Serializable to support pickling for multiprocessing
@@ -60,8 +63,25 @@ class PegInsertionEnv(gym.Env, Serializable):
         self.infinite_tasks = infinite_tasks
         self._goal_noise = 0.0
         self.normalize_kwarg = normalize_kwarg
+
         self.env = gym.make('Meta-World/MT1', env_name='peg-insert-side-v3', render_mode='rgb_array', seed=seed)
         self.env.unwrapped.seed(seed)
+
+        self.render_width = render_width
+        self.render_height = render_height
+        task_env = self.env.unwrapped
+        # Replace renderer with custom resolution
+        task_env.mujoco_renderer = MujocoRenderer(
+            task_env.model,
+            task_env.data,
+            width=self.render_width,
+            height=self.render_height,
+        )
+        self.camera_name_to_id = {}
+        for i in range(task_env.model.ncam):
+            camera_name = task_env.model.camera(i).name
+            self.camera_name_to_id[camera_name] = i
+        logger.log(f"Support following cameras: {self.camera_name_to_id}")
 
         self.action_space = self.env.action_space
         assert isinstance(self.env.observation_space, gym.spaces.Box)
@@ -97,7 +117,7 @@ class PegInsertionEnv(gym.Env, Serializable):
         super(PegInsertionEnv, self).__init__()
         self.init_consts()
         self.init_tasks()
-        assert os.environ['MUJOCO_GL'] == 'egl'
+        assert 'MUJOCO_GL' not in os.environ
     
     def init_consts(self):
         self.bounds = {}
@@ -265,15 +285,15 @@ class PegInsertionEnv(gym.Env, Serializable):
 
         self.reset()
 
-    def render(self):
-        try:
-            frame = self.env.render()
-            frame = cv2.resize(frame, (400, 400, 3))
-            return frame
-        except (AttributeError, ImportError, RuntimeError) as e:
-            # Fallback to a blank frame if rendering fails (common in headless environments)
-            logger.log(f"Warning: Rendering failed with error: {e}. Returning blank frame.")
-            return np.zeros((400, 400, 3), dtype=np.uint8)
+    def render(self, camera_name: str = None):
+        assert camera_name is None or camera_name in self.camera_name_to_id
+        camera_id = self.camera_name_to_id.get(camera_name, -1)
+        self.env.unwrapped.mujoco_renderer.camera_id = camera_id
+        frame = self.env.unwrapped.mujoco_renderer.render('rgb_array')
+        assert isinstance(frame, np.ndarray) and frame.shape == (self.render_width, self.render_height, 3)
+        if camera_name == "gripperPOV":
+            frame = np.rot90(frame, k=1)
+        return frame
 
     # def render_pos(self) -> np.ndarray:
     #     return self._last_obs[:3] # TODO!!
