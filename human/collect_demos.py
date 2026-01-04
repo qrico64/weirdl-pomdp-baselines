@@ -124,6 +124,13 @@ def data_collection_cycle(
     plt.ion()
     plt.show(block=False)
 
+    # --- Blitting state (initialized after first draw) ---
+    blit_bg = None
+    blit_bbox = None
+    blit_supported = hasattr(fig.canvas, "copy_from_bbox") and hasattr(fig.canvas, "restore_region") and hasattr(fig.canvas, "blit")
+    need_full_redraw = True  # first frame needs full draw
+    # ----------------------------------------------------
+
     print("Starting data collection...")
     print("Controls (rotated to match wrist camera view):")
     print("  W: +X (right in wrist view)")
@@ -189,38 +196,67 @@ def data_collection_cycle(
 
             stats[1].append(time.perf_counter_ns() - t0)
             t0 = time.perf_counter_ns()
-            # Render and display (optimized)
-            try:
-                # Render each camera
-                camera_images = []
-                for idx, camera_name in enumerate(camera_ids):
-                    img = env.unwrapped.render(camera_name)
-                    camera_images.append(img)
-                stats[2].append(time.perf_counter_ns() - t0)
-                t0 = time.perf_counter_ns()
+            
+            # Render each camera
+            camera_images = []
+            for idx, camera_name in enumerate(camera_ids):
+                img = env.unwrapped.render(camera_name)
+                camera_images.append(img)
+            stats[2].append(time.perf_counter_ns() - t0)
+            t0 = time.perf_counter_ns()
 
-                # Update images efficiently (no clear())
-                if img_plots[0] is None:
-                    # First frame - create the image plots
-                    for idx, (ax, img, camera_name) in enumerate(zip(axes, camera_images, camera_ids)):
-                        img_plots[idx] = ax.imshow(img)
-                        ax.set_title(camera_name)
-                        ax.axis('off')
-                else:
-                    # Update existing image data (much faster)
-                    for idx, img in enumerate(camera_images):
-                        img_plots[idx].set_data(img)
+            # Update images efficiently (no clear())
+            if img_plots[0] is None:
+                # First frame - create the image plots
+                for idx, (ax, img, camera_name) in enumerate(zip(axes, camera_images, camera_ids)):
+                    img_plots[idx] = ax.imshow(img, animated=True)  # animated=True is important for blitting
+                    ax.set_title(camera_name)
+                    ax.axis('off')
 
-                # Update title
-                fig.suptitle(f"Rollout {rollout_idx + 1}/{num_rollouts}, Step {step_count}, Reward: {reward:.2f}, Return: {total_reward:.2f}")
+                # Title changes every frame, so make it a text artist (also animated)
+                title_text = fig.suptitle(
+                    f"Rollout {rollout_idx + 1}/{num_rollouts}, Step {step_count}, Reward: {reward:.2f}, Return: {total_reward:.2f}",
+                    animated=True,
+                )
 
-                # Efficient canvas update
+                # Force a full draw once so we can capture the background
+                fig.canvas.draw()
+                blit_bbox = fig.bbox
+                if blit_supported:
+                    blit_bg = fig.canvas.copy_from_bbox(blit_bbox)
+                need_full_redraw = False
+
+            else:
+                # Update existing image data (much faster)
+                for idx, img in enumerate(camera_images):
+                    img_plots[idx].set_data(img)
+
+                # Update title text (do NOT call fig.suptitle repeatedly)
+                title_text.set_text(
+                    f"Rollout {rollout_idx + 1}/{num_rollouts}, Step {step_count}, Reward: {reward:.2f}, Return: {total_reward:.2f}"
+                )
+
+            # Blit update path
+            if blit_supported and (blit_bg is not None) and (not need_full_redraw):
+                # Restore background
+                fig.canvas.restore_region(blit_bg)
+
+                # Redraw only animated artists
+                for ax, im in zip(axes, img_plots):
+                    ax.draw_artist(im)
+                fig.draw_artist(title_text)
+
+                # Blit the updated region
+                fig.canvas.blit(blit_bbox)
+                fig.canvas.flush_events()
+                # Small pause to pump GUI events
+                plt.pause(0.001)
+            else:
+                # Fallback: full redraw (still works if backend doesn't support blitting well)
                 fig.canvas.draw_idle()
                 fig.canvas.flush_events()
-                plt.pause(0.001)  # Minimal pause just to process events
-
-            except Exception as e:
-                print(f"Warning: Could not render: {e}")
+                plt.pause(0.001)
+            
             stats[3].append(time.perf_counter_ns() - t0)
             t0 = time.perf_counter_ns()
 
