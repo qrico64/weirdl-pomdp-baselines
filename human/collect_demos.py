@@ -159,19 +159,16 @@ def data_collection_cycle(
         total_reward = 0.0
         success_reached = False
 
-        # 5Hz operation: 0.2 seconds per step
-        target_dt = 0.2
+        target_dt = 0
 
-        stats = [[] for i in range(4)]
         while not done:
+            loop_start_time = time.perf_counter()
+
             # Get action from keyboard first
             action = get_action_from_keyboard()
 
-            t0 = time.perf_counter_ns()
             # Step environment
             next_obs, reward, done, info = env.step(action)
-            stats[0].append(time.perf_counter_ns() - t0)
-            t0 = time.perf_counter_ns()
 
             # Check for success (following policies/learner.py:892-893)
             if "is_goal_state" in info and info["is_goal_state"]:
@@ -193,17 +190,12 @@ def data_collection_cycle(
             if success_reached:
                 print(f"Success reached at step {step_count}!")
                 done = True
-
-            stats[1].append(time.perf_counter_ns() - t0)
-            t0 = time.perf_counter_ns()
             
             # Render each camera
             camera_images = []
             for idx, camera_name in enumerate(camera_ids):
                 img = env.unwrapped.render(camera_name)
                 camera_images.append(img)
-            stats[2].append(time.perf_counter_ns() - t0)
-            t0 = time.perf_counter_ns()
 
             # Update images efficiently (no clear())
             if img_plots[0] is None:
@@ -256,18 +248,16 @@ def data_collection_cycle(
                 fig.canvas.draw_idle()
                 fig.canvas.flush_events()
                 plt.pause(0.001)
-            
-            stats[3].append(time.perf_counter_ns() - t0)
-            t0 = time.perf_counter_ns()
+
+            remaining_time = target_dt - (time.perf_counter() - loop_start_time)
+            if remaining_time > 0:
+                time.sleep(remaining_time)
 
             # Check if figure is closed
             if not plt.fignum_exists(fig.number):
                 print("Window closed. Stopping data collection.")
                 done = True
                 break
-
-            if len(stats[0]) % 20 == 1:
-                print(np.array(stats).mean(axis=1) / 1000)
 
         # Convert lists to numpy arrays
         observations = np.array(observations)
