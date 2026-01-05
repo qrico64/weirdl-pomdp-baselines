@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Literal
 from utils import logger, helpers
+import mujoco
 import metaworld
 import gymnasium as gym
 import imageio
@@ -8,6 +9,7 @@ import os
 from PIL import Image
 from torchkit import pytorch_utils as ptu
 from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
+import inspect
 
 from .core.serializable import Serializable
 
@@ -48,7 +50,6 @@ class PegInsertionEnv(gym.Env, Serializable):
         Serializable.quick_init(self, locals())
 
         assert seed is not None, f"{seed}"
-        assert len(kwargs) == 0
         self.seed = seed
         self._max_episode_steps = max_episode_steps
         self.task_mode = task_mode
@@ -95,7 +96,8 @@ class PegInsertionEnv(gym.Env, Serializable):
         high = np.full((self.env.observation_space.shape[0] + L,), np.inf, dtype=self.env.observation_space.dtype)
         self.observation_space = gym.spaces.Box(low, high, dtype=self.env.observation_space.dtype)
 
-        logger.log("\n****** Creating PegInsertionEnv Environment ******")
+        logger.log()
+        logger.log("****** Creating PegInsertionEnv Environment ******")
         logger.log(f"n_tasks: {self.n_tasks}")
         logger.log(f"num_train_tasks: {self.num_train_tasks}")
         logger.log(f"num_eval_tasks: {self.num_eval_tasks}")
@@ -108,7 +110,10 @@ class PegInsertionEnv(gym.Env, Serializable):
         logger.log(f"normalize_kwarg: {self.normalize_kwarg}")
         logger.log(f"observation_space: {self.observation_space.shape}")
         logger.log(f"action_space: {self.action_space.shape}")
-        logger.log("****** Created PegInsertionEnv Environment ******\n")
+        for k in kwargs:
+            logger.log(f"Unused param: {k}: {kwargs[k]}")
+        logger.log("****** Created PegInsertionEnv Environment ******")
+        logger.log()
 
         self._last_obs = None
         self._last_success = False
@@ -127,8 +132,12 @@ class PegInsertionEnv(gym.Env, Serializable):
             'high': self.env.unwrapped._random_reset_space.high[:3]
         }
         self.bounds['target_bounds'] = {
-            'low': self.env.unwrapped.goal_space.low,
-            'high': self.env.unwrapped.goal_space.high
+            'low': np.array([-0.32, 0.4, 0.129]),
+            'high': np.array([-0.22, 0.7, 0.131]),
+        }
+        self.bounds['target_bounds'] = {
+            'low': np.array([-0.32, 0.55, 0.129]),
+            'high': np.array([-0.22, 0.7, 0.131]),
         }
         self.bounds['default_peg_reset_pos'] = np.array([0.18491799, 0.66787545, 0.02], dtype=np.float32)
         self.bounds['default_target_reset_pos'] = np.array([-0.28711311, 0.4484228, 0.12945647], dtype=np.float32)
@@ -174,15 +183,93 @@ class PegInsertionEnv(gym.Env, Serializable):
             raise NotImplementedError()
         self.goals = np.concatenate([self.train_goals, self.eval_goals], axis=0)
         self.tasks = [{'peg_pos': self.goals[i][:3], 'target_pos': self.goals[i][3:]} for i in range(self.n_tasks)]
+    
+    def _mj_name2id_safe(self, model, obj_type, name: str) -> int:
+        """mujoco name -> id with a clear error if missing."""
+        name = str(name)
+        idx = mujoco.mj_name2id(model, obj_type, name)
+        if idx < 0:
+            raise KeyError(f"MuJoCo name not found: obj_type={obj_type} name='{name}'")
+        return idx
 
-    def _set_peg_pos(self, peg_pos):
+    def _set_peg_pos(self, peg_pos: np.ndarray):
+        """
+        Teleports the peg by targeting the unnamed free joint.
+        """
         assert isinstance(peg_pos, np.ndarray) and peg_pos.shape == (3,)
-        self.env.unwrapped._set_obj_xyz(peg_pos)
+        
+        env = self.env.unwrapped
+        m, d = env.model, env.data
 
-    def _set_target_pos(self, target_pos):
+        try:
+            # 1. Identify the peg joint index
+            # Usually, the unnamed joint ('') is the free joint for the peg.
+            peg_jid = -1
+            for i in range(m.njnt):
+                # Check for unnamed joint OR check for Free Joint type (mjJNT_FREE = 0)
+                if m.joint(i).name == '' or m.jnt_type[i] == 0:
+                    peg_jid = i
+                    break
+
+            if peg_jid == -1:
+                raise KeyError("Could not find an unnamed or free joint for the peg.")
+
+            # 2. Get the address in the qpos vector
+            # For a free joint, qpos_adr points to the start of 7 constants [x, y, z, qw, qx, qy, qz]
+            qpos_adr = m.jnt_qposadr[peg_jid]
+
+            # 3. Update the position (x, y, z)
+            d.qpos[qpos_adr : qpos_adr + 2] = peg_pos[:2]
+
+            # 4. Zero out velocities (x, y, z, roll, pitch, yaw)
+            # mjJNT_FREE has 6 degrees of freedom in qvel
+            qvel_adr = m.jnt_dofadr[peg_jid]
+            d.qvel[qvel_adr : qvel_adr + 6] = 0.0
+
+            # 5. Sync physics to update visual and collision state
+            mujoco.mj_forward(m, d)
+
+        except Exception as e:
+            print(f"Warning: Could not set peg position: {e}")
+
+    def _set_target_pos(self, target_pos: np.ndarray):
+        """
+        Moves the target and the physical box while maintaining 
+        the internal offset required by Meta-World.
+        """
         assert isinstance(target_pos, np.ndarray) and target_pos.shape == (3,)
-        self.env.unwrapped._target_pos = target_pos
-        self.env.unwrapped.goal = target_pos
+        env = self.env.unwrapped
+        m, d = env.model, env.data
+
+        # 1. Calculate the displacement (Delta)
+        # We see how far the new target is from the current site position
+        sid = self._mj_name2id_safe(m, mujoco.mjtObj.mjOBJ_SITE, "goal")
+        current_site_pos = m.site_pos[sid].copy()
+        delta = target_pos - current_site_pos
+
+        # 2. Update Meta-World bookkeeping
+        env._target_pos = np.array(target_pos, dtype=np.float32)
+        # If your environment uses the Z=0 convention for 'goal', 
+        # you may want to preserve that, but usually updating it to target_pos is fine.
+        env.goal = env._target_pos.copy() 
+
+        # 3. Move the Site (Red Dot)
+        m.site_pos[sid] = env._target_pos
+
+        # 4. Move the Box Body by the same Delta
+        try:
+            # Try common Meta-World body names for this task
+            box_name = "box" if "box" in [m.body(i).name for i in range(m.nbody)] else "hole"
+            box_bid = self._mj_name2id_safe(m, mujoco.mjtObj.mjOBJ_BODY, box_name)
+            
+            # Apply the displacement to the existing body position
+            m.body_pos[box_bid] += delta
+            
+        except Exception as e:
+            print(f"Warning: Could not shift physical box body: {e}")
+
+        # 5. Finalize physics
+        mujoco.mj_forward(m, d)
     
     def reset(self, **kwargs):
         obs, info = self.env.reset(seed=self.seed)
@@ -304,6 +391,10 @@ class PegInsertionEnv(gym.Env, Serializable):
             '_goal_noise': ptu.format_array_3dec(self._goal_noise),
         }
         return str(info)
+
+    def compute_success(self, obs, action):
+        reward, eval_info = self.env.unwrapped.evaluate_state(obs, action)
+        return eval_info["success"]
 
     def is_goal_state(self):
         """

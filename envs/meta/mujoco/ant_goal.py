@@ -61,6 +61,8 @@ class AntGoalEnv(MultitaskAntEnv):
         logger.log(f"normalize_kwarg: {self.normalize_kwarg}")
         logger.log(f"reward_scale: {self.reward_scale}")
         logger.log(f"goal_radius: {self.goal_radius}")
+        for k in kwargs:
+            logger.log(f"Unused param: {k}: {kwargs[k]}")
         logger.log("****** Created AntGoal Environment ******")
         logger.log()
 

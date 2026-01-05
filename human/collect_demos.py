@@ -171,7 +171,8 @@ def data_collection_cycle(
             next_obs, reward, done, info = env.step(action)
 
             # Check for success (following policies/learner.py:892-893)
-            if "is_goal_state" in info and info["is_goal_state"]:
+            assert "success" in info
+            if info["success"]:
                 success_reached = True
 
             # Store transition
@@ -311,12 +312,12 @@ def main():
 
     # Extract environment configuration
     env_args = v["env"]
+    assert env_args['goal_conditioning'] == "yes_both"
     env = make_env(
         env_id=env_args["env_name"],
         episodes_per_task=1,
         seed=seed,
-        num_train_tasks=env_args.get("num_train_tasks", None),
-        num_eval_tasks=env_args.get("num_eval_tasks", None),
+        **env_args,
     )
 
     # Default to 10 rollouts if not specified in config
