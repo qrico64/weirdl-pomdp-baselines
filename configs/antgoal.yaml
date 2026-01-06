@@ -1,4 +1,4 @@
-seed: 44
+seed: 42
 cuda: 0 # use_gpu
 env:
   env_type: meta
@@ -31,10 +31,9 @@ train:
   buffer_size: 1e7
 
   num_updates_per_iter: 0.02 # equal, or positive integer
-  batch_size: 32 # to tune based on sampled_seq_len
+  batch_size: 18 # to tune based on sampled_seq_len
   sampled_seq_len: -1 # -1 is all, or positive integer
   sample_weight_baseline: 0.0
-
 
 eval:
   eval_stochastic: false # also eval stochastic policy
@@ -43,11 +42,18 @@ eval:
   log_tensorboard: true
 
 policy:
-  seq_model: mlp # [lstm, gru]
+  seq_model: transformer # [lstm, gru]
+  feature_extractor_type: markovian
   algo_name: sac # [td3, sac]
 
-  dqn_layers: [512, 512, 512, 512, 512]
-  policy_layers: [512, 512, 512, 512, 512]
+  action_embedding_size: 128
+  observ_embedding_size: 512
+  reward_embedding_size: 128
+  nominal_embedding_size: 16
+  rnn_num_layers: 3
+
+  dqn_layers: [512, 512, 512, 512]
+  policy_layers: [512, 512, 512, 512]
   lr: 0.0003
   gamma: 0.99
   tau: 0.005

@@ -25,7 +25,7 @@ class Actor_TransformerEncoder(nn.Module):
         rnn_num_layers,
         max_len, # Maximum sequence length
         image_encoder=None,
-        feature_extractor_type: Literal['separate', 'combined1', 'combined2'] = 'separate',
+        feature_extractor_type: Literal['separate', 'combined1', 'combined2', 'markovian'] = 'separate',
         combined_embedding_size: int = None,
         nominal_embedding_size: int = 0,
         num_trajectories: int = 2,
@@ -93,6 +93,12 @@ class Actor_TransformerEncoder(nn.Module):
             self.hidden_size = self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size + self.nominal_embedding_size
             self.max_context_len = max_len + 1
             logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {action_embedding_size} + {reward_embedding_size} + {nominal_embedding_size} = {self.hidden_size})")
+        elif self.feature_extractor_type == "markovian":
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            self.hidden_size = self.observ_embedding_size
+            self.max_context_len = max_len + 1
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size})")
         else:
             raise NotImplementedError(f"{self.feature_extractor_type}")
         
@@ -129,9 +135,9 @@ class Actor_TransformerEncoder(nn.Module):
         )
 
         self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.max_context_len)
-        self.mask = torch.triu(ptu.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
-        self.mask = self.mask.masked_fill(self.mask == 1, float('-inf'))
-        self.register_buffer("my_mask", self.mask)
+        mask_cache = ptu.triu(ptu.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
+        mask_cache = mask_cache.masked_fill(mask_cache == 1, float("-inf"))
+        self.register_buffer("mask", mask_cache)
 
         # self.stats = [[], [], []]
 
@@ -175,14 +181,14 @@ class Actor_TransformerEncoder(nn.Module):
                 context = torch.cat([action_encs, reward_encs, obs_encs, nominal_encs], dim=-1)
             else:
                 context = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
+        elif self.feature_extractor_type == 'markovian':
+            context = obs_encs
         else:
             raise NotImplementedError()
         
-        try:
-            pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
-        except Exception:
-            breakpoint()
-        context = context + pos
+        pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
+        if self.feature_extractor_type != 'markovian':
+            context = context + pos
 
         return context  # (T * 3, N, self.hidden_size)
 
@@ -195,6 +201,7 @@ class Actor_TransformerEncoder(nn.Module):
 
         """
         obs = observs
+        assert nominals is not None
         if nominals.dim() == 3:
             nominals = nominals.squeeze(-1)
         
@@ -202,12 +209,15 @@ class Actor_TransformerEncoder(nn.Module):
         T, N, _ = context.shape
         assert context.shape == (T, N, self.hidden_size)
 
-        mask = self.mask[:T, :T]
-        decoded = self.transformer(context, mask=mask)
-        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T, N, self.hidden_size), f"{decoded.shape} != {(T, N, self.hidden_size)}"
+        if self.feature_extractor_type != "markovian":
+            mask = self.mask[:T, :T]
+            decoded = self.transformer(context, mask=mask)
+        else:
+            decoded = context
+        assert isinstance(decoded, torch.Tensor) and decoded.shape == (T, N, self.hidden_size), f"{decoded.shape} != {(T, N, self.hidden_size)}"
         obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
         obs_embeds = decoded[obs_embed_indx, :, :]
-        # assert obs_embeds.shape == (T, N, self.hidden_size)
+        assert obs_embeds.shape == (T, N, self.hidden_size)
         if self.use_residuals:
             base_embeds = self.base_action_embedder(base_actions)
             assert base_embeds.shape == (T, N, self.action_embedding_size)
@@ -231,12 +241,15 @@ class Actor_TransformerEncoder(nn.Module):
         T, N, _ = context.shape
         assert context.shape == (T, N, self.hidden_size)
 
-        mask = self.mask[:T, :T]
-        decoded = self.transformer(context, mask=mask)
-        # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T, N, self.hidden_size), f"{decoded.shape} != {(T, N, self.hidden_size)}"
+        if self.feature_extractor_type != "markovian":
+            mask = self.mask[:T, :T]
+            decoded = self.transformer(context, mask=mask)
+        else:
+            decoded = context
+        assert isinstance(decoded, torch.Tensor) and decoded.shape == (T, N, self.hidden_size), f"{decoded.shape} != {(T, N, self.hidden_size)}"
         obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
         obs_embeds = decoded[obs_embed_indx, :, :]
-        # assert obs_embeds.shape == (T, N, self.hidden_size)
+        assert obs_embeds.shape == (T, N, self.hidden_size)
         if self.use_residuals:
             base_embeds = self.base_action_embedder(base_actions)
             assert base_embeds.shape == (T, N, self.action_embedding_size)
@@ -280,9 +293,12 @@ class Actor_TransformerEncoder(nn.Module):
         # t0 = time.perf_counter_ns()
         # assert context.shape == (T * 3, N, self.hidden_size)
 
-        mask = self.mask[:T, :T]
+        if self.feature_extractor_type != "markovian":
+            mask = self.mask[:T, :T]
+            decoded = self.transformer(context, mask=mask)
+        else:
+            decoded = context
         obs_embed_idx = lengths * 3 - 1 if self.feature_extractor_type == 'separate' else lengths - 1
-        decoded = self.transformer(context, mask=mask)
         # self.stats[1].append(time.perf_counter_ns() - t0)
         # t0 = time.perf_counter_ns()
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"

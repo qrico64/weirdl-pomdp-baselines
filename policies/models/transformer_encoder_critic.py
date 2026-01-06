@@ -23,7 +23,7 @@ class Critic_TransformerEncoder(nn.Module):
         rnn_num_layers,
         max_len, # Maximum sequence length
         image_encoder=None,
-        feature_extractor_type: Literal['separate', 'combined1', 'combined2'] = 'separate',
+        feature_extractor_type: Literal['separate', 'combined1', 'combined2', 'markovian'] = 'separate',
         combined_embedding_size: int = None,
         nominal_embedding_size: int = 0,
         num_trajectories: int = 2,
@@ -90,6 +90,12 @@ class Critic_TransformerEncoder(nn.Module):
             self.hidden_size = self.observ_embedding_size + self.action_embedding_size + self.reward_embedding_size + self.nominal_embedding_size
             self.max_context_len = max_len + 1
             logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size} + {action_embedding_size} + {reward_embedding_size} + {nominal_embedding_size} = {self.hidden_size})")
+        elif self.feature_extractor_type == "markovian":
+            self.action_embedder = utl.FeatureExtractor(action_dim, action_embedding_size, F.relu)
+            self.reward_embedder = utl.FeatureExtractor(1, reward_embedding_size, F.relu)
+            self.hidden_size = self.observ_embedding_size
+            self.max_context_len = max_len + 1
+            logger.log(f"feature_extractor_type = {self.feature_extractor_type} ({observ_embedding_size})")
         else:
             raise NotImplementedError(f"{self.feature_extractor_type}")
 
@@ -126,9 +132,9 @@ class Critic_TransformerEncoder(nn.Module):
             )
 
         self.positional_embedding = positional_embeddings.SinusoidalPositionalEncoding(d_model=self.hidden_size, max_len=self.max_context_len)
-        self.mask = torch.triu(ptu.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
-        self.mask = self.mask.masked_fill(self.mask == 1, float('-inf'))
-        self.register_buffer("my_mask", self.mask)
+        mask_cache = torch.triu(torch.ones(self.max_context_len, self.max_context_len), diagonal=1).float()
+        mask_cache = mask_cache.masked_fill(mask_cache == 1, float("-inf"))
+        self.register_buffer("mask", mask_cache)
 
     def _get_obs_embedding(self, observs: torch.Tensor) -> torch.Tensor:
         if self.image_encoder is None:  # vector obs
@@ -170,10 +176,14 @@ class Critic_TransformerEncoder(nn.Module):
                 context = torch.cat([action_encs, reward_encs, obs_encs, nominal_encs], dim=-1)
             else:
                 context = torch.cat([action_encs, reward_encs, obs_encs], dim=-1)
+        elif self.feature_extractor_type == 'markovian':
+            context = obs_encs
         else:
             raise NotImplementedError()
+        
         pos = self.positional_embedding(context.transpose(0, 1)).transpose(0, 1)
-        context = context + pos
+        if self.feature_extractor_type != 'markovian':
+            context = context + pos
 
         return context  # (T * 3, N, self.hidden_size)
 
@@ -194,12 +204,15 @@ class Critic_TransformerEncoder(nn.Module):
         # assert current_actions is not None
         # assert current_actions.shape == (T, N, prev_actions.shape[2]) or current_actions.shape == (T - 1, N, prev_actions.shape[2]), f"{current_actions.shape} != {(T, N, prev_actions.shape[2])} or {(T - 1, N, prev_actions.shape[2])}"
 
-        mask = self.mask[:T, :T]
-        decoded = self.transformer(context, mask=mask)
+        if self.feature_extractor_type != "markovian":
+            mask = self.mask[:T, :T]
+            decoded = self.transformer(context, mask=mask)
+        else:
+            decoded = context
         # assert isinstance(decoded, torch.Tensor) and decoded.shape == (T * 3, N, self.hidden_size), f"{decoded.shape} != {(T * 3, N, self.hidden_size)}"
         obs_embed_indx = torch.arange(2, T, 3) if self.feature_extractor_type == 'separate' else torch.arange(T)
         obs_embeds = decoded[obs_embed_indx, :, :]
-        # assert obs_embeds.shape == (T, N, self.hidden_size), f"{obs_embeds.shape} != {(T, N, self.hidden_size)}"
+        assert obs_embeds.shape == (T, N, self.hidden_size), f"{obs_embeds.shape} != {(T, N, self.hidden_size)}"
 
         if self.is_value_fn:
             assert current_actions is None

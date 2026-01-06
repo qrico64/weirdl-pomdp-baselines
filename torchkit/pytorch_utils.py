@@ -201,3 +201,20 @@ def format_array_3dec(x: np.ndarray) -> str:
         )
     return str(x)
 
+def cuda_checkpoint(tag: str):
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    print(f"[CUDA checkpoint] {tag}", flush=True)
+
+def find_bad_tensor(module):
+    torch.cuda.synchronize()
+    print("Start cloning state_dict...", flush=True)
+
+    for k, v in module.state_dict().items():
+        if not torch.is_tensor(v) or not v.is_cuda:
+            continue
+        print(f"TRY  {k:60s}  {tuple(v.shape)}  {v.dtype}  {v.device}", flush=True)
+        _ = v.detach().clone()           # triggers D2D copy
+        torch.cuda.synchronize()
+        print(f"OK   {k:60s}", flush=True)
+
